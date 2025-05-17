@@ -1,0 +1,121 @@
+# 默认配置文件：虚拟筛选代表子集选择
+
+# 数据处理配置
+data:
+  # 分子过滤参数
+  filtering:
+    enabled: true
+    max_mw: 1000  # 最大分子量
+    min_mw: 100   # 最小分子量
+    max_atoms: 100  # 最大原子数
+    remove_salts: true  # 是否移除盐
+    neutralize: true  # 尝试中和电荷
+    standardize: true  # 标准化分子表示
+    reject_invalid: true  # 拒绝无效SMILES
+
+  # 3D构象生成参数
+  conformers:
+    enabled: true
+    method: "ETKDG"  # ETKDG算法
+    force_field: "MMFF94"  # 力场类型
+    max_iters: 200  # 最大优化迭代次数
+    num_conf: 1  # 每个分子保留构象数量
+    
+  # 电荷计算参数
+  charges:
+    enabled: true
+    method: "gasteiger"  # gasteiger或其他方法
+    
+  # 批处理参数
+  batching:
+    enabled: true
+    batch_size: 10000  # 每批处理的分子数
+    n_jobs: -1  # 并行处理的作业数，-1表示使用所有可用CPU
+
+# GPU加速配置
+gpu:
+  # 是否启用GPU
+  enabled: true
+  # 是否自动检测GPU可用性
+  auto_detect: true
+  # 使用的GPU设备ID (0, 1, ...)
+  device_id: 0
+  # 将大矩阵分割成较小的批次以适应GPU内存
+  use_batching: true
+  batch_size: 5000
+  # 使用GPU的功能
+  features:
+    kmeans: true      # GPU加速K-means聚类
+    pca: true         # GPU加速PCA降维
+    distances: true   # GPU加速距离矩阵计算
+    transformers: true  # 使用GPU加速分子表示学习（如需要）
+
+# 特征计算配置
+features:
+  # 2D指纹参数
+  fingerprints:
+    types: ["morgan"]  # morgan, rdkit, maccs等
+    morgan_radius: 2
+    morgan_bits: 1024
+    
+  # 3D形状特征
+  shape:
+    enabled: true
+    descriptors: ["usr", "moments"]  # usr = Ultrafast Shape Recognition
+    
+  # 静电特征
+  electrostatics:
+    enabled: true
+    descriptors: ["charges_stats", "dipole"]  # 电荷统计和偶极矩
+    
+  # 理化性质
+  properties:
+    enabled: true
+    descriptors: ["mw", "logp", "tpsa", "hba", "hbd", "rotatable_bonds"]
+    
+  # 特征降维
+  dimensionality_reduction:
+    enabled: true
+    method: "pca"  # pca, umap, autoencoder等
+    n_components: 50
+    scaler: "standard"  # 标准化方法：standard, minmax, robust
+    variance_ratio: 0.95  # 用于PCA的方差解释比例
+
+# 聚类与选择配置
+clustering:
+  # 聚类方法
+  method: "butina"  # butina, kmeans, maxmin, hdbscan等
+  
+  # Butina聚类参数
+  butina:
+    cutoff: 0.4  # 相似度阈值
+    
+  # K-means参数
+  kmeans:
+    n_clusters: 100000  # 簇数量
+    batch_size: 10000  # mini batch size
+    max_iter: 100  # 最大迭代次数
+    
+  # MaxMin参数
+  maxmin:
+    init_method: "random"  # 初始化方法：random, diverse
+    distance_measure: "combo"  # 距离度量：tanimoto, euclidean, combo
+    
+  # HDBSCAN参数
+  hdbscan:
+    min_cluster_size: 5
+    min_samples: 5
+
+# 输出设置
+output:
+  formats: ["csv", "sdf"]  # 输出格式
+  save_intermediates: false  # 是否保存中间结果
+  compression: true  # 是否压缩输出文件
+
+# 验证设置
+validation:
+  property_coverage: true  # 属性分布比较
+  compare_fingerprints: true  # 指纹空间覆盖度
+  nearest_neighbor_analysis: true  # 最近邻分析
+  visualize_distribution: true  # 可视化分布
+  plots: ["pca", "property_dist"]  # 生成的图表类型 
