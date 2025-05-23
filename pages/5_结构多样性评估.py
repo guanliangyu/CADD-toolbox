@@ -37,6 +37,7 @@ import scipy.stats as stats
 from sklearn.neighbors import KernelDensity
 from scipy.stats import gaussian_kde
 import openmm as mm
+from sklearn.decomposition import PCA
 
 # 设置inotify限制
 
@@ -560,71 +561,88 @@ def plot_nearest_neighbor_distribution(sim_matrix):
     plt.tight_layout()
     return fig
 
-def perform_clustering_analysis(sim_matrix, n_clusters=5, eps=0.3):
+def perform_clustering_analysis(sim_matrix, n_clusters=5, eps=0.3, min_samples=5, perplexity=30.0):
     """进行聚类分析"""
-    import torch
-    import cupy as cp
-    from cuml.manifold import TSNE
-    from cuml.cluster import KMeans, DBSCAN
-    
+    # 移除了对 cuml.manifold.TSNE, cuml.cluster.KMeans, cuml.cluster.DBSCAN 的局部导入
+    # 将使用全局导入的别名 (cuTSNE, cuKMeans, cuDBSCAN) 或全局的 sklearn 版本
+
     cuda_available, device = initialize_cuda()
-    
+
     if not cuda_available:
         st.warning("⚠️ GPU不可用，将使用CPU进行计算")
-        # CPU版本的代码
-        tsne = TSNE(n_components=2, metric='precomputed', random_state=42)
-        coords = tsne.fit_transform(dist_matrix)
-        
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto')
-        clusters = kmeans.fit_predict(coords)
-        
-        dbscan = DBSCAN(metric='precomputed', eps=eps)
-        dbscan_clusters = dbscan.fit_predict(dist_matrix)
-        
+        dist_matrix = 1 - sim_matrix  # Numpy distance matrix
+
+        # 使用 sklearn.manifold.TSNE
+        # TSNE 是在文件顶部从 sklearn.manifold 导入的
+        tsne_cpu = TSNE(n_components=2, metric='precomputed', random_state=42, init='random', learning_rate='auto')
+        coords = tsne_cpu.fit_transform(dist_matrix)
+
+        # 使用 sklearn.cluster.KMeans
+        # KMeans 是在文件顶部从 sklearn.cluster 导入的
+        # 对于 sklearn KMeans, n_init='auto' 是有效的 (默认为10次运行)
+        kmeans_cpu = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto', algorithm='lloyd')
+        clusters = kmeans_cpu.fit_predict(coords)  # K-means 通常在 t-SNE 降维后的坐标上运行
+
+        # 使用 sklearn.cluster.DBSCAN
+        # DBSCAN 是在文件顶部从 sklearn.cluster 导入的
+        dbscan_cpu = DBSCAN(metric='precomputed', eps=eps, min_samples=min_samples)
+        dbscan_clusters = dbscan_cpu.fit_predict(dist_matrix) # DBSCAN 通常在原始距离矩阵上运行
+
         return {
             'coords': coords,
             'kmeans_clusters': clusters,
             'dbscan_clusters': dbscan_clusters
         }
-    
-    # 将相似度矩阵转换为距离矩阵并移至GPU
-    dist_matrix = 1 - sim_matrix
-    dist_matrix_gpu = cp.asarray(dist_matrix)
-    
-    # 使用cuML的t-SNE进行降维
-    st.info("🚀 使用GPU加速的t-SNE进行降维...")
-    tsne = TSNE(n_components=2, random_state=42, method='fft')
-    coords = tsne.fit_transform(dist_matrix_gpu)
-    
-    # 使用cuML的K-means进行聚类
-    st.info("🚀 使用GPU加速的K-means进行聚类...")
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto')
-    clusters = kmeans.fit_predict(coords)
-    
-    # 使用cuML的DBSCAN进行聚类
-    st.info("🚀 使用GPU加速的DBSCAN进行聚类...")
-    dbscan = DBSCAN(metric='precomputed', eps=eps)
-    dbscan_clusters = dbscan.fit_predict(dist_matrix_gpu)
-    
-    # 将结果转回CPU
-    coords = cp.asnumpy(coords)
-    clusters = cp.asnumpy(clusters)
-    dbscan_clusters = cp.asnumpy(dbscan_clusters)
-    
-    # 显示GPU内存使用情况
-    gpu_mem_alloc = torch.cuda.memory_allocated(device) / 1024**2
-    gpu_mem_cached = torch.cuda.memory_reserved(device) / 1024**2
-    st.success(
-        f"✅ GPU加速聚类分析完成:\n"
-        f"- GPU内存使用: {gpu_mem_alloc:.1f}MB\n"
-        f"- GPU缓存: {gpu_mem_cached:.1f}MB"
-    )
-    
-    return {
-        'coords': coords,
-        'kmeans_clusters': clusters,
-        'dbscan_clusters': dbscan_clusters
-    }
+    else: # GPU 路径
+        # 导入 torch 和 cupy (如果它们只在此块的GPU特定逻辑中使用，则保持局部导入是可行的)
+        import torch 
+        import cupy as cp
+
+        dist_matrix = 1 - sim_matrix # 原始 sim_matrix 是 numpy 数组
+        dist_matrix_gpu = cp.asarray(dist_matrix) # cupy 距离矩阵
+
+        st.info("🚀 使用GPU加速的t-SNE进行降维...")
+        # 尝试使用 cuML TSNE，如果失败则回退到 CPU 版本
+        try:
+            # cuML TSNE 可能不支持 metric='precomputed'，先尝试不使用它
+            tsne_gpu = cuTSNE(n_components=2, perplexity=perplexity, random_state=42)
+            # 由于 cuML TSNE 可能不接受距离矩阵，我们尝试直接使用相似性矩阵
+            coords_gpu = tsne_gpu.fit_transform(cp.asarray(sim_matrix))
+            coords = cp.asnumpy(coords_gpu)
+            st.success("✅ 成功使用 cuML TSNE")
+        except Exception as e:
+            st.warning(f"⚠️ cuML TSNE 失败 ({str(e)})，回退到 CPU 版本")
+            # 回退到 CPU 版本的 TSNE
+            tsne_cpu = TSNE(n_components=2, metric='precomputed', perplexity=perplexity, random_state=42, init='random', learning_rate='auto')
+            coords = tsne_cpu.fit_transform(dist_matrix)
+
+        st.info("🚀 使用GPU加速的K-means进行聚类...")
+        # 使用全局别名 cuKMeans (cuml.cluster.KMeans)
+        # 修复: n_init 必须是整数, 例如 10
+        kmeans_gpu = cuKMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        clusters_gpu = kmeans_gpu.fit_predict(cp.asarray(coords)) # K-means 在 t-SNE 降维后的坐标上运行
+        clusters = cp.asnumpy(clusters_gpu)
+
+        st.info("🚀 使用GPU加速的DBSCAN进行聚类...")
+        # 使用全局别名 cuDBSCAN (cuml.cluster.DBSCAN)
+        dbscan_gpu = cuDBSCAN(metric='precomputed', eps=eps, min_samples=min_samples)
+        dbscan_clusters_gpu = dbscan_gpu.fit_predict(dist_matrix_gpu) # DBSCAN 在原始距离矩阵上运行
+        dbscan_clusters = cp.asnumpy(dbscan_clusters_gpu)
+
+        # 显示GPU内存使用情况
+        gpu_mem_alloc = torch.cuda.memory_allocated(device) / 1024**2
+        gpu_mem_cached = torch.cuda.memory_reserved(device) / 1024**2
+        st.success(
+            f"✅ GPU加速聚类分析完成:\\n"
+            f"- GPU内存使用: {gpu_mem_alloc:.1f}MB\\n"
+            f"- GPU缓存: {gpu_mem_cached:.1f}MB"
+        )
+
+        return {
+            'coords': coords,
+            'kmeans_clusters': clusters,
+            'dbscan_clusters': dbscan_clusters
+        }
 
 def plot_clustering_results(clustering_results, title="Clustering Results"):
     """Plot clustering results"""
@@ -933,10 +951,13 @@ def perform_dimensionality_reduction(similarity_matrix, method="t-SNE", perplexi
     debug_info = st.empty()
     start_time = time.time()
     
+    # 初始化 cuda_available 变量，避免 UnboundLocalError
+    cuda_available = False
+    
     try:
-        # 确保在正确的线程中运行
-        if not asyncio.get_event_loop().is_running():
-            asyncio.set_event_loop(asyncio.new_event_loop())
+        # 移除对 asyncio 的使用，因为在这个上下文中不需要
+        # if not asyncio.get_event_loop().is_running():
+        #     asyncio.set_event_loop(asyncio.new_event_loop())
         
         # 初始化CUDA
         cuda_available, device = initialize_cuda()
@@ -950,13 +971,28 @@ def perform_dimensionality_reduction(similarity_matrix, method="t-SNE", perplexi
                 # 清理GPU内存
                 torch.cuda.empty_cache()
                 
-                tsne = cuTSNE(
-                    n_components=2,
-                    perplexity=perplexity,
-                    random_state=42
-                )
-                coords = tsne.fit_transform(cp.asarray(distance_matrix))
-                coords = cp.asnumpy(coords)
+                # 为 cuML TSNE 添加 try-except，如果失败则回退到 CPU
+                try:
+                    tsne = cuTSNE(
+                        n_components=2,
+                        perplexity=perplexity,
+                        random_state=42
+                    )
+                    coords = tsne.fit_transform(cp.asarray(similarity_matrix))  # 使用相似性矩阵而不是距离矩阵
+                    coords = cp.asnumpy(coords)
+                    debug_info.success("✅ 成功使用 cuML TSNE")
+                except Exception as e:
+                    debug_info.warning(f"⚠️ cuML TSNE 失败 ({str(e)})，回退到 CPU 版本")
+                    # 回退到 CPU 版本的 TSNE
+                    tsne = TSNE(
+                        n_components=2,
+                        perplexity=perplexity,
+                        random_state=42,
+                        metric='precomputed',
+                        init='random',
+                        learning_rate='auto'
+                    )
+                    coords = tsne.fit_transform(distance_matrix)
                 
                 # 清理GPU内存
                 torch.cuda.empty_cache()
@@ -966,7 +1002,9 @@ def perform_dimensionality_reduction(similarity_matrix, method="t-SNE", perplexi
                     n_components=2,
                     perplexity=perplexity,
                     random_state=42,
-                    metric='precomputed'
+                    metric='precomputed',
+                    init='random',
+                    learning_rate='auto'
                 )
                 coords = tsne.fit_transform(distance_matrix)
         
@@ -984,13 +1022,23 @@ def perform_dimensionality_reduction(similarity_matrix, method="t-SNE", perplexi
                         min_dist=min_dist,
                         random_state=42
                     )
-                    coords = reducer.fit_transform(cp.asarray(distance_matrix))
+                    coords = reducer.fit_transform(cp.asarray(similarity_matrix))  # 使用相似性矩阵
                     coords = cp.asnumpy(coords)
                     
                     # 清理GPU内存
                     torch.cuda.empty_cache()
                 except ImportError:
                     debug_info.warning("cuML UMAP不可用，回退到CPU版本...")
+                    reducer = umap.UMAP(
+                        n_components=2,
+                        n_neighbors=n_neighbors,
+                        min_dist=min_dist,
+                        metric='precomputed',
+                        random_state=42
+                    )
+                    coords = reducer.fit_transform(distance_matrix)
+                except Exception as e:
+                    debug_info.warning(f"⚠️ cuML UMAP 失败 ({str(e)})，回退到 CPU 版本")
                     reducer = umap.UMAP(
                         n_components=2,
                         n_neighbors=n_neighbors,
@@ -1010,6 +1058,14 @@ def perform_dimensionality_reduction(similarity_matrix, method="t-SNE", perplexi
                 )
                 coords = reducer.fit_transform(distance_matrix)
         
+        elif method == "PCA":
+            # 添加 PCA 支持
+            from sklearn.decomposition import PCA
+            debug_info.info("使用PCA进行降维...")
+            # PCA 需要特征矩阵，我们使用相似性矩阵
+            pca = PCA(n_components=2, random_state=42)
+            coords = pca.fit_transform(similarity_matrix)
+        
         else:
             raise ValueError(f"不支持的降维方法: {method}")
         
@@ -1026,7 +1082,7 @@ def perform_dimensionality_reduction(similarity_matrix, method="t-SNE", perplexi
         return None
     
     finally:
-        # 清理GPU内存
+        # 清理GPU内存 - 现在 cuda_available 总是被初始化
         if cuda_available:
             torch.cuda.empty_cache()
 
@@ -1346,15 +1402,55 @@ if st.button("开始评估") and fileA is not None and fileB is not None:
             # 聚类分析
             st.subheader("Clustering Analysis")
             with st.spinner("Performing clustering analysis..."):
+                # 确保 n_clusters 是整数类型, eps 是浮点类型
+                # 假设 n_clusters 和 eps 变量在此处是可用的
+                # 您需要确保它们在 streamlit UI 中被正确定义和获取
+                try:
+                    current_n_clusters = int(n_clusters) 
+                except NameError:
+                    st.error("变量 'n_clusters' 未定义。请检查您的 Streamlit UI 输入部分。")
+                    st.stop()
+                except ValueError:
+                    st.error(f"变量 'n_clusters' 的值 '{n_clusters}' 无法转换为整数。请检查输入。")
+                    st.stop()
+                
+                try:
+                    current_eps = float(eps)
+                except NameError:
+                    st.error("变量 'eps' 未定义。请检查您的 Streamlit UI 输入部分。")
+                    st.stop()
+                except ValueError:
+                    st.error(f"变量 'eps' 的值 '{eps}' 无法转换为浮点数。请检查输入。")
+                    st.stop()
+
+                st.write(f"Debug: Using n_clusters: {current_n_clusters} (type: {type(current_n_clusters)}) for KMeans")
+                st.write(f"Debug: Using eps: {current_eps} (type: {type(current_eps)}) for DBSCAN")
+                
+                # 获取并转换 min_samples
+                try:
+                    # min_samples 是从 st.slider 获取的，应该已经是 int
+                    current_min_samples = int(min_samples) 
+                except NameError:
+                    st.error("变量 'min_samples' 未定义。请检查您的 Streamlit UI 输入部分。")
+                    st.stop()
+                except ValueError:
+                    st.error(f"变量 'min_samples' 的值 '{min_samples}' 无法转换为整数。请检查输入。")
+                    st.stop()
+                st.write(f"Debug: Using min_samples: {current_min_samples} (type: {type(current_min_samples)}) for DBSCAN")
+
                 clustering_resultsA = perform_clustering_analysis(
                     sim_matrixA, 
-                    n_clusters=n_clusters,
-                    eps=eps
+                    n_clusters=current_n_clusters,
+                    eps=current_eps,
+                    min_samples=current_min_samples, # 传递 min_samples
+                    perplexity=30.0 # Pass fixed perplexity for this visualization
                 )
                 clustering_resultsB = perform_clustering_analysis(
                     sim_matrixB, 
-                    n_clusters=n_clusters,
-                    eps=eps
+                    n_clusters=current_n_clusters,
+                    eps=current_eps,
+                    min_samples=current_min_samples, # 传递 min_samples
+                    perplexity=30.0 # Pass fixed perplexity for this visualization
                 )
                 
                 col1, col2 = st.columns(2)
