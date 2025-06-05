@@ -134,4 +134,15 @@ venv.bak/
 .idea/
 .vscode/
 *.swp
-*~ 
+*~
+
+# Data files and directories
+data/
+*.sdf
+*.log
+
+# Cursor IDE
+.cursor/
+
+# Test files (temporary)
+test_*.py 
