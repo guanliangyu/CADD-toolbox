@@ -41,6 +41,12 @@ if 'file_size_cache' not in st.session_state:
     st.session_state.file_size_cache = None
 if 'total_count_computing' not in st.session_state:
     st.session_state.total_count_computing = False
+if 'file_hash_cache' not in st.session_state:
+    st.session_state.file_hash_cache = None
+if 'scan_timestamp_cache' not in st.session_state:
+    st.session_state.scan_timestamp_cache = None
+if 'is_estimated_cache' not in st.session_state:
+    st.session_state.is_estimated_cache = False
 
 # 确保数据目录存在
 DATA_DIR = "data"
@@ -59,6 +65,43 @@ def get_file_size(file_path_or_obj):
         elif hasattr(file_path_or_obj, 'getvalue'):
             return len(file_path_or_obj.getvalue())
     return 0
+
+def get_file_hash(file_path_or_obj):
+    """获取文件的简单哈希值用于缓存验证"""
+    import hashlib
+    
+    if isinstance(file_path_or_obj, str):
+        if os.path.exists(file_path_or_obj):
+            # 对于文件路径，使用文件修改时间+大小作为哈希
+            stat = os.stat(file_path_or_obj)
+            hash_input = f"{file_path_or_obj}_{stat.st_size}_{stat.st_mtime}"
+            return hashlib.md5(hash_input.encode()).hexdigest()
+    else:
+        # 对于上传文件，使用名称+大小作为哈希
+        if hasattr(file_path_or_obj, 'name') and hasattr(file_path_or_obj, 'size'):
+            hash_input = f"{file_path_or_obj.name}_{file_path_or_obj.size}"
+            return hashlib.md5(hash_input.encode()).hexdigest()
+    return None
+
+def is_cache_valid(file_path_or_obj):
+    """检查缓存是否有效"""
+    current_hash = get_file_hash(file_path_or_obj)
+    if not current_hash:
+        return False
+    
+    # 检查是否有缓存的哈希值
+    cached_hash = st.session_state.file_hash_cache
+    cached_identifier = st.session_state.last_processed_file_identifier
+    
+    # 当前文件标识符
+    if isinstance(file_path_or_obj, str):
+        current_identifier = file_path_or_obj
+    else:
+        current_identifier = file_path_or_obj.name if hasattr(file_path_or_obj, 'name') else str(file_path_or_obj)
+    
+    return (current_hash == cached_hash and 
+            current_identifier == cached_identifier and 
+            st.session_state.scan_results_valid)
 
 def fast_line_count(file_path):
     """快速计算文件行数 - 适用于大文件"""
@@ -357,7 +400,10 @@ def smart_file_scan(file_to_scan, current_filename, smiles_column):
                     # 每1000个分子更新一次进度（仅对大文件）
                     if file_size > LARGE_FILE_THRESHOLD and i % 1000 == 0 and i > 0:
                         elapsed = time.time() - start_time
-                        st.write(f"已扫描 {i} 个条目... ({elapsed:.1f}秒)")
+                        # 使用更优雅的进度显示方式
+                        if not hasattr(st.session_state, 'scan_status_placeholder'):
+                            st.session_state.scan_status_placeholder = st.empty()
+                        st.session_state.scan_status_placeholder.info(f"⏳ 扫描进度: {i:,} 个条目 ({elapsed:.1f}秒)")
                 
                 total_mols = count
                 preview_data = [Chem.MolToSmiles(m) if m else "无效分子" for m in temp_preview_mols]
@@ -402,7 +448,37 @@ st.markdown("""
 使用RDKit的ETKDGv3算法生成构象。
 
 🚀 **性能优化**: 自动检测大文件并使用优化策略处理百万级分子库。
+⚡ **智能缓存**: 避免重复扫描，提升用户体验。
 """)
+
+# 缓存管理区域
+if st.session_state.scan_results_valid:
+    with st.expander("🗂️ 缓存管理", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.session_state.scan_timestamp_cache:
+                cache_time = time.strftime("%Y-%m-%d %H:%M:%S", 
+                                         time.localtime(st.session_state.scan_timestamp_cache))
+                st.info(f"缓存时间: {cache_time}")
+        with col2:
+            if st.button("🔄 清除缓存", help="强制重新扫描文件"):
+                # 清除所有相关缓存
+                st.session_state.scan_results_valid = False
+                st.session_state.file_hash_cache = None
+                st.session_state.last_processed_file_identifier = None
+                st.session_state.scan_timestamp_cache = None
+                st.session_state.total_potential_mols_cache = 0
+                st.session_state.preview_data_cache = []
+                st.session_state.df_preview_cache = None
+                st.session_state.initial_scan_successful_cache = False
+                st.session_state.is_estimated_cache = False
+                # 清除状态占位符
+                if hasattr(st.session_state, 'scan_status_placeholder'):
+                    delattr(st.session_state, 'scan_status_placeholder')
+                if hasattr(st.session_state, 'parse_status_placeholder'):
+                    delattr(st.session_state, 'parse_status_placeholder')
+                st.success("✅ 缓存已清除！")
+                st.rerun()
 
 # 文件输入方式选择
 st.subheader("1. 选择输入方式")
@@ -450,7 +526,7 @@ if input_method == "上传新文件":
                     # 保存到session state
                     st.session_state.saved_file_path = file_path
                     st.session_state.saved_work_dir = work_dir_new
-            st.session_state.scan_results_valid = False 
+                    st.session_state.scan_results_valid = False 
                     st.session_state.last_processed_file_identifier = file_path
                     st.rerun()
             else:
@@ -531,11 +607,12 @@ if input_ready:
     st.header("文件预览和生成控制")
     st.markdown(f"**当前文件:** `{current_filename}`")
 
-    # 使用缓存的扫描结果
-    if (st.session_state.scan_results_valid and 
-        st.session_state.last_processed_file_identifier == (selected_file_path or current_filename)):
-        
-        st.info("使用缓存的扫描结果")
+    # 使用改进的缓存机制
+    file_to_scan = uploaded_file if uploaded_file else selected_file_path
+    cache_valid = is_cache_valid(file_to_scan)
+    
+    if cache_valid:
+        st.success("✅ 使用缓存的扫描结果 (文件未变更)")
         total_mols = st.session_state.total_potential_mols_cache
         preview_data = st.session_state.preview_data_cache
         df_preview = st.session_state.df_preview_cache
@@ -562,26 +639,30 @@ if input_ready:
                 st.info(f"文件大小: {size_mb:.1f} MB")
 
     else:  # 执行新的智能扫描
-        file_to_scan = uploaded_file if uploaded_file else selected_file_path
-        
         try:
             with st.spinner(f"正在智能扫描文件 '{current_filename}'..."):
                 total_mols, preview_data, df_preview, scan_successful, is_estimated = smart_file_scan(
                     file_to_scan, current_filename, smiles_column
                 )
 
-            # 更新缓存
+            # 更新缓存，包括新的哈希值
             if scan_successful:
+                current_hash = get_file_hash(file_to_scan)
+                current_identifier = file_to_scan if isinstance(file_to_scan, str) else getattr(file_to_scan, 'name', str(file_to_scan))
+                
                 st.session_state.total_potential_mols_cache = total_mols
                 st.session_state.preview_data_cache = preview_data
                 st.session_state.df_preview_cache = df_preview
                 st.session_state.initial_scan_successful_cache = True
                 st.session_state.scan_results_valid = True
                 st.session_state.is_estimated_cache = is_estimated
+                st.session_state.file_hash_cache = current_hash
+                st.session_state.last_processed_file_identifier = current_identifier
+                st.session_state.scan_timestamp_cache = time.time()
             else:
                 st.session_state.scan_results_valid = False
 
-    except Exception as e:
+        except Exception as e:
             st.error(f"扫描文件时出错: {e}")
             st.session_state.scan_results_valid = False
             scan_successful = False
@@ -671,7 +752,10 @@ if input_ready:
                                     if len(input_mols) >= limit:
                                         break
                                     if total_processed % 50000 == 0:
-                                        st.write(f"已处理 {total_processed:,} 行，解析了 {len(input_mols):,} 个有效分子...")
+                                        # 使用状态占位符而不是频繁输出
+                                        if not hasattr(st.session_state, 'parse_status_placeholder'):
+                                            st.session_state.parse_status_placeholder = st.empty()
+                                        st.session_state.parse_status_placeholder.info(f"🔄 解析进度: {total_processed:,} 行，{len(input_mols):,} 个有效分子")
                         else:
                             df_full = pd.read_csv(current_file)
                             csv_row_count = len(df_full)
@@ -679,8 +763,8 @@ if input_ready:
 
                         if smiles_column in df_full.columns:
                             for idx, row in df_full.iterrows():
-                                    if len(input_mols) >= limit:
-                                        break
+                                if len(input_mols) >= limit:
+                                    break
                                 smi = str(row[smiles_column])
                                 mol = Chem.MolFromSmiles(smi)
                                 if mol:
@@ -705,7 +789,9 @@ if input_ready:
                                     
                                     # 进度更新（仅对大文件）
                                     if st.session_state.file_size_cache > LARGE_FILE_THRESHOLD and i % 10000 == 0 and i > 0:
-                                        st.write(f"已处理 {i:,} 行，解析了 {len(input_mols):,} 个有效分子...")
+                                        if not hasattr(st.session_state, 'parse_status_placeholder'):
+                                            st.session_state.parse_status_placeholder = st.empty()
+                                        st.session_state.parse_status_placeholder.info(f"🔄 解析进度: {i:,} 行，{len(input_mols):,} 个有效分子")
                         else:
                             with io.TextIOWrapper(current_file, encoding="utf-8") as text_reader:
                                 for i, line in enumerate(text_reader):
@@ -734,7 +820,9 @@ if input_ready:
                             
                             # 进度更新（仅对大文件）
                             if st.session_state.file_size_cache > LARGE_FILE_THRESHOLD and i % 1000 == 0 and i > 0:
-                                st.write(f"已处理 {i:,} 个SDF条目，解析了 {len(input_mols):,} 个有效分子...")
+                                if not hasattr(st.session_state, 'parse_status_placeholder'):
+                                    st.session_state.parse_status_placeholder = st.empty()
+                                st.session_state.parse_status_placeholder.info(f"🔄 解析进度: {i:,} 个SDF条目，{len(input_mols):,} 个有效分子")
                     
                     if not input_mols:
                         st.warning("基于当前范围，没有解析到有效分子用于生成。")
@@ -746,53 +834,79 @@ if input_ready:
             
             # 构象生成处理
             if input_mols:
-                st.info(f"开始为 {len(input_mols):,} 个分子生成构象...")
+                st.info(f"🚀 开始为 {len(input_mols):,} 个分子生成构象...")
+                
+                # 创建进度条和状态显示区域
+                progress_container = st.container()
+                with progress_container:
                     progress_bar = st.progress(0.0)
+                    status_text = st.empty()
+                    stats_col1, stats_col2, stats_col3 = st.columns(3)
+                    with stats_col1:
+                        completed_metric = st.empty()
+                    with stats_col2:
+                        success_metric = st.empty()
+                    with stats_col3:
+                        speed_metric = st.empty()
+                
                 processed_mols = []
                 success_count = 0
                 errors = []
-                    status_text = st.empty()
                 
                 tasks = [(mol, num_conformers, max_attempts, random_seed) for mol in input_mols]
 
                 completed = 0
                 start_time = time.time()
+                last_update_time = start_time
                 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
                     future_to_idx = {executor.submit(generate_conformers_for_mol, *task): i
-                                     for i, task in enumerate(tasks)}
+                    for i, task in enumerate(tasks)}
                     
                     for future in concurrent.futures.as_completed(future_to_idx):
                         idx = future_to_idx[future]
                         identifier = source_ids[idx]
                         
-                            try:
-                                result = future.result()
-                                if result['success'] and result['mol']:
+                        try:
+                            result = future.result()
+                            if result['success'] and result['mol']:
                                 processed_mols.append(result['mol'])
                                 success_count += 1
-                                else:
+                            else:
                                 errors.append(f"警告 {identifier}: {result['message']}")
-                            except Exception as exc:
+                        except Exception as exc:
                             errors.append(f"处理错误 {identifier}: {exc}")
                         
                         completed += 1
                         progress = completed / len(input_mols)
+                        current_time = time.time()
                         
-                        # 更新进度和时间估算
-                        elapsed_time = time.time() - start_time
-                        if completed > 10:  # 避免初期估算不准
-                            avg_time_per_mol = elapsed_time / completed
-                            remaining_time = avg_time_per_mol * (len(input_mols) - completed)
-                            status_text.text(f"处理中: {completed:,}/{len(input_mols):,} 分子完成 | 预计剩余: {remaining_time/60:.1f}分钟")
-                        else:
-                            status_text.text(f"处理中: {completed:,}/{len(input_mols):,} 分子完成")
-                        
+                        # 限制更新频率，每0.5秒或每完成100个分子更新一次
+                        if (current_time - last_update_time > 0.5) or (completed % 100 == 0) or (completed == len(input_mols)):
+                            elapsed_time = current_time - start_time
+                            
+                            # 更新进度条
                             progress_bar.progress(progress)
+                            
+                            # 更新指标
+                            completed_metric.metric("已完成", f"{completed:,}/{len(input_mols):,}")
+                            success_metric.metric("成功率", f"{success_count/completed*100:.1f}%" if completed > 0 else "0%")
+                            
+                            if completed > 10:  # 避免初期估算不准
+                                avg_time_per_mol = elapsed_time / completed
+                                remaining_time = avg_time_per_mol * (len(input_mols) - completed)
+                                speed = completed / elapsed_time
+                                speed_metric.metric("处理速度", f"{speed:.1f} 分子/秒")
+                                status_text.info(f"⏱️ 预计剩余时间: {remaining_time/60:.1f} 分钟")
+                            else:
+                                speed_metric.metric("处理速度", "计算中...")
+                                status_text.info(f"🔄 处理中: {completed:,}/{len(input_mols):,} 分子完成")
+                            
+                            last_update_time = current_time
 
                 total_time = time.time() - start_time
-                status_text.text(f"构象生成完成！总耗时: {total_time/60:.1f}分钟")
-                st.success(f"成功为 {success_count:,}/{len(input_mols):,} 个分子生成了构象。")
+                status_text.success(f"✅ 构象生成完成！总耗时: {total_time/60:.1f} 分钟")
+                st.success(f"🎉 成功为 {success_count:,}/{len(input_mols):,} 个分子生成了构象！")
 
                 if errors:
                     with st.expander("⚠️ 查看错误和警告", expanded=False):

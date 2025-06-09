@@ -251,7 +251,19 @@ def calculate_molecule_descriptors(mol, calc, conf_ids=None):
 
 def generate_descriptor_script(input_file, output_file, include_3d, aggregation_method, include_smiles, num_workers, processing_limit):
     """生成独立的描述符计算脚本"""
-    script_content = f'''#!/usr/bin/env python3
+    log_file_path = output_file.replace('.csv', '.log')
+    
+    # 先转换变量为字符串
+    include_3d_str = str(include_3d)
+    include_smiles_str = str(include_smiles)  
+    num_workers_str = str(num_workers)
+    # 特殊处理 processing_limit，如果是 float('inf') 则直接使用
+    if processing_limit == float('inf'):
+        processing_limit_str = "float('inf')"
+    else:
+        processing_limit_str = str(processing_limit)
+    
+    script_content = '''#!/usr/bin/env python3
 """
 独立的多进程分子描述符计算脚本
 由Streamlit应用自动生成
@@ -279,7 +291,7 @@ except ImportError:
     sys.exit(1)
 
 # 设置日志
-log_file = "{output_file.replace('.csv', '.log')}"
+log_file = "{log_file_path}"
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -292,15 +304,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 配置参数
-CONFIG = {{
+CONFIG = {
     'input_file': '{input_file}',
     'output_file': '{output_file}',
-    'include_3d': {include_3d},
+    'include_3d': {include_3d_str},
     'aggregation_method': '{aggregation_method}',
-    'include_smiles': {include_smiles},
-    'num_workers': {num_workers},
-    'processing_limit': {processing_limit}
-}}
+    'include_smiles': {include_smiles_str},
+    'num_workers': {num_workers_str},
+    'processing_limit': {processing_limit_str}
+}
 
 def create_mordred_calculator(include_3d=True):
     """创建Mordred描述符计算器"""
@@ -415,43 +427,68 @@ def calculate_molecule_descriptors_worker(args):
 def main():
     """主函数"""
     logger.info("开始多进程分子描述符计算")
-    logger.info(f"配置参数: {{CONFIG}}")
+    logger.info("配置参数: %s", CONFIG)
     
     start_time = time.time()
     
     # 读取输入文件
     input_file = CONFIG['input_file']
-    logger.info(f"读取输入文件: {{input_file}}")
+    logger.info("读取输入文件: %s", input_file)
     
     supplier = Chem.ForwardSDMolSupplier(input_file, removeHs=False, sanitize=True)
     
-    # 收集分子数据
-    mol_data = []
+    # 收集分子数据 - 按分子ID分组多个构象
+    molecules_by_id = {}
     count = 0
     
     for mol in supplier:
         if CONFIG['processing_limit'] != float('inf') and count >= CONFIG['processing_limit']:
             break
         if mol is not None:
+            # 获取分子ID/名称
+            mol_id = mol.GetProp('_Name') if mol.HasProp('_Name') else "mol_" + str(count)
+            if not mol_id.strip():  # 如果_Name为空
+                mol_id = mol.GetProp('IDNUMBER') if mol.HasProp('IDNUMBER') else "mol_" + str(count)
+            
             # 提取分子属性以避免MolBlock转换时丢失
-            mol_props = {{}}
+            mol_props = {}
             for prop_name in mol.GetPropNames():
                 mol_props[prop_name] = mol.GetProp(prop_name)
             
-            # 获取分子ID/名称
-            mol_id = mol.GetProp('_Name') if mol.HasProp('_Name') else f"mol_{{count}}"
-            if not mol_id.strip():  # 如果_Name为空
-                mol_id = mol.GetProp('IDNUMBER') if mol.HasProp('IDNUMBER') else f"mol_{{count}}"
+            # 按分子ID分组 - 合并同一分子的多个构象
+            if mol_id not in molecules_by_id:
+                molecules_by_id[mol_id] = {
+                    'mol': Chem.Mol(mol),  # 创建分子副本
+                    'props': mol_props,
+                    'conformer_count': 0
+                }
+                # 清除已有构象
+                molecules_by_id[mol_id]['mol'].RemoveAllConformers()
             
-            mol_block = Chem.MolToMolBlock(mol)
-            mol_data.append((mol_block, mol_id, mol_props, CONFIG['include_3d'], CONFIG['aggregation_method']))
+            # 添加当前构象到分子对象
+            for conf_id in range(mol.GetNumConformers()):
+                conf = mol.GetConformer(conf_id)
+                new_conf = Chem.Conformer(molecules_by_id[mol_id]['mol'].GetNumAtoms())
+                for i in range(molecules_by_id[mol_id]['mol'].GetNumAtoms()):
+                    new_conf.SetAtomPosition(i, conf.GetAtomPosition(i))
+                molecules_by_id[mol_id]['mol'].AddConformer(new_conf, assignId=True)
+                molecules_by_id[mol_id]['conformer_count'] += 1
+            
             count += 1
     
-    logger.info(f"准备处理 {{len(mol_data)}} 个分子")
+    # 转换为处理数据格式
+    mol_data = []
+    for mol_id, mol_info in molecules_by_id.items():
+        mol_block = Chem.MolToMolBlock(mol_info['mol'])
+        mol_data.append((mol_block, mol_id, mol_info['props'], CONFIG['include_3d'], CONFIG['aggregation_method']))
+    
+    logger.info("准备处理 %d 个独特分子", len(mol_data))
+    total_conformers = sum(mol_info['conformer_count'] for mol_info in molecules_by_id.values())
+    logger.info("总共 %d 个构象将被聚合", total_conformers)
     
     # 多进程计算
     num_workers = CONFIG['num_workers']
-    logger.info(f"启动多进程计算 ({{num_workers}} 个进程)")
+    logger.info("启动多进程计算 (%d 个进程)", num_workers)
     
     results = []
     if num_workers == 1:
@@ -460,7 +497,7 @@ def main():
             result = calculate_molecule_descriptors_worker(mol_args)
             results.append(result)
             if (i + 1) % 50 == 0:
-                logger.info(f"已处理: {{i + 1}}/{{len(mol_data)}}")
+                logger.info("已处理: %d/%d", i + 1, len(mol_data))
     else:
         # 多进程
         with Pool(processes=num_workers) as pool:
@@ -469,7 +506,7 @@ def main():
                 results.append(result)
                 completed += 1
                 if completed % 50 == 0:
-                    logger.info(f"已完成: {{completed}}/{{len(mol_data)}}")
+                    logger.info("已完成: %d/%d", completed, len(mol_data))
     
     # 整理结果
     all_descriptors = []
@@ -492,10 +529,10 @@ def main():
             all_smiles.append("Invalid")
     
     elapsed_time = time.time() - start_time
-    logger.info(f"计算完成! 成功: {{success_count}}/{{len(mol_data)}}, 耗时: {{elapsed_time:.1f}}秒")
+    logger.info("计算完成! 成功: %d/%d, 耗时: %.1f秒", success_count, len(mol_data), elapsed_time)
     
     # 创建DataFrame
-    df_data = {{}}
+    df_data = {}
     
     # 添加分子ID列
     df_data['Molecule_ID'] = all_mol_ids
@@ -513,8 +550,8 @@ def main():
     output_file = CONFIG['output_file']
     df.to_csv(output_file, index=False)
     
-    logger.info(f"结果已保存到: {{output_file}}")
-    logger.info(f"输出形状: {{df.shape}}")
+    logger.info("结果已保存到: %s", output_file)
+    logger.info("输出形状: %s", str(df.shape))
     
     # 统计信息
     numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -522,18 +559,33 @@ def main():
         valid_desc = df[numeric_cols].notna().sum().sum()
         total_desc = len(df) * len(numeric_cols)
         coverage = valid_desc / total_desc * 100 if total_desc > 0 else 0
-        logger.info(f"有效描述符覆盖率: {{coverage:.1f}}%")
+        logger.info("有效描述符覆盖率: %.1f%%", coverage)
 
 if __name__ == "__main__":
     main()
 '''
+    
+    # 替换占位符
+    script_content = script_content.replace('{input_file}', input_file)
+    script_content = script_content.replace('{output_file}', output_file)
+    script_content = script_content.replace('{log_file_path}', log_file_path)
+    script_content = script_content.replace('{include_3d_str}', include_3d_str)
+    script_content = script_content.replace('{aggregation_method}', aggregation_method)
+    script_content = script_content.replace('{include_smiles_str}', include_smiles_str)
+    script_content = script_content.replace('{num_workers_str}', num_workers_str)
+    script_content = script_content.replace('{processing_limit_str}', processing_limit_str)
+    
     return script_content
 
-def save_descriptor_results(all_descriptors, all_smiles_final, descriptor_names, include_smiles, output_path):
+def save_descriptor_results(all_descriptors, all_smiles_final, descriptor_names, include_smiles, output_path, mol_ids=None):
     """保存描述符计算结果"""
     # 创建DataFrame
     with st.spinner("组织结果数据..."):
         df_data = {}
+        
+        # 添加分子ID列（如果有）
+        if mol_ids:
+            df_data['Molecule_ID'] = mol_ids[:len(all_descriptors)]
         
         # 添加SMILES列（如果需要）
         if include_smiles:
@@ -796,11 +848,10 @@ else:
                         
                         st.success(f"✅ 计算器就绪，共 {len(descriptor_names)} 个描述符")
                         
-                        # 读取SDF文件
-                        with st.spinner("读取SDF文件..."):
+                        # 读取SDF文件并按分子ID分组构象
+                        with st.spinner("读取SDF文件并按分子ID分组..."):
                             supplier = Chem.ForwardSDMolSupplier(file_path, removeHs=False, sanitize=True)
-                            molecules = []
-                            smiles_list = []
+                            molecules_by_id = {}
                             
                             progress_bar = st.progress(0)
                             status_text = st.empty()
@@ -811,21 +862,55 @@ else:
                                     break
                                 
                                 if mol is not None:
-                                    molecules.append(mol)
-                                    if include_smiles:
-                                        try:
-                                            smiles = Chem.MolToSmiles(mol)
-                                            smiles_list.append(smiles)
-                                        except:
-                                            smiles_list.append("Invalid")
+                                    # 获取分子ID/名称
+                                    mol_id = mol.GetProp('_Name') if mol.HasProp('_Name') else f"mol_{count}"
+                                    if not mol_id.strip():  # 如果_Name为空
+                                        mol_id = mol.GetProp('IDNUMBER') if mol.HasProp('IDNUMBER') else f"mol_{count}"
+                                    
+                                    # 提取分子属性以避免MolBlock转换时丢失
+                                    mol_props = {prop_name: mol.GetProp(prop_name) for prop_name in mol.GetPropNames()}
+                                    
+                                    # 按分子ID分组 - 合并同一分子的多个构象
+                                    if mol_id not in molecules_by_id:
+                                        molecules_by_id[mol_id] = {
+                                            'mol': Chem.Mol(mol),  # 创建分子副本
+                                            'props': mol_props,
+                                            'conformer_count': 0
+                                        }
+                                        # 清除已有构象
+                                        molecules_by_id[mol_id]['mol'].RemoveAllConformers()
+                                    
+                                    # 添加当前构象到分子对象
+                                    for conf_id in range(mol.GetNumConformers()):
+                                        conf = mol.GetConformer(conf_id)
+                                        new_conf = Chem.Conformer(molecules_by_id[mol_id]['mol'].GetNumAtoms())
+                                        for i in range(molecules_by_id[mol_id]['mol'].GetNumAtoms()):
+                                            new_conf.SetAtomPosition(i, conf.GetAtomPosition(i))
+                                        molecules_by_id[mol_id]['mol'].AddConformer(new_conf, assignId=True)
+                                        molecules_by_id[mol_id]['conformer_count'] += 1
+                                    
                                     count += 1
                                     
                                     if count % 100 == 0:
-                                        progress = min(count / processing_limit, 1.0)
-                                        progress_bar.progress(progress)
-                                        status_text.text(f"已读取 {count} 个分子...")
+                                        progress = min(count / processing_limit, 1.0) if processing_limit != float('inf') else count / 10000
+                                        progress_bar.progress(min(progress, 1.0))
+                                        status_text.text(f"已读取 {count} 个分子，分组为 {len(molecules_by_id)} 个独特分子...")
+                            
+                            # 转换为列表格式供后续处理
+                            molecules = list(molecules_by_id.values())
+                            smiles_list = []
+                            
+                            # 为每个分子生成SMILES
+                            if include_smiles:
+                                for mol_info in molecules:
+                                    try:
+                                        smiles = Chem.MolToSmiles(mol_info['mol'])
+                                        smiles_list.append(smiles)
+                                    except:
+                                        smiles_list.append("Invalid")
                         
-                        st.success(f"✅ 成功读取 {len(molecules)} 个分子")
+                        total_conformers = sum(mol_info['conformer_count'] for mol_info in molecules)
+                        st.success(f"✅ 成功读取并分组：{len(molecules)} 个独特分子，共 {total_conformers} 个构象")
                         
                         # 根据选择的执行方式进行计算
                         if execution_mode == "多进程后台执行 (推荐)":
@@ -974,14 +1059,27 @@ else:
                             # 计算描述符
                             all_descriptors = []
                             all_smiles_final = []
+                            all_mol_ids = []
                             start_time = time.time()
                             
                             st.info("🔄 串行计算模式...")
                             progress_bar = st.progress(0)
                             status_text = st.empty()
                             
-                            for i, mol in enumerate(molecules):
-                                status_text.text(f"计算描述符: {i+1}/{len(molecules)}")
+                            # 提取分子ID
+                            mol_ids = list(molecules_by_id.keys())
+                            
+                            for i, mol_info in enumerate(molecules):
+                                mol = mol_info['mol']
+                                mol_id = mol_ids[i] if i < len(mol_ids) else f"mol_{i}"
+                                status_text.text(f"计算描述符: {i+1}/{len(molecules)} (构象数: {mol_info['conformer_count']})")
+                                
+                                # 恢复分子属性
+                                for prop_name, prop_value in mol_info['props'].items():
+                                    mol.SetProp(prop_name, prop_value)
+                                
+                                # 保存分子ID
+                                all_mol_ids.append(mol_id)
                                 
                                 # 计算该分子的描述符
                                 conformer_descriptors = calculate_molecule_descriptors(mol, calc)
@@ -997,13 +1095,16 @@ else:
                                     # 使用NaN填充
                                     all_descriptors.append([np.nan] * len(descriptor_names))
                                 
-                                # 处理SMILES
+                                # 处理SMILES（使用预先计算的SMILES）
                                 if include_smiles:
-                                    try:
-                                        smiles = Chem.MolToSmiles(mol) if mol else "Invalid"
-                                        all_smiles_final.append(smiles)
-                                    except:
-                                        all_smiles_final.append("Invalid")
+                                    if i < len(smiles_list):
+                                        all_smiles_final.append(smiles_list[i])
+                                    else:
+                                        try:
+                                            smiles = Chem.MolToSmiles(mol) if mol else "Invalid"
+                                            all_smiles_final.append(smiles)
+                                        except:
+                                            all_smiles_final.append("Invalid")
                                 
                                 # 更新进度
                                 progress = (i + 1) / len(molecules)
@@ -1014,7 +1115,7 @@ else:
                             
                             # 创建DataFrame并保存结果
                             save_descriptor_results(all_descriptors, all_smiles_final, descriptor_names, 
-                                                   include_smiles, output_path)
+                                                   include_smiles, output_path, all_mol_ids)
                     
                     except Exception as e:
                         st.error(f"处理过程中出错: {e}")

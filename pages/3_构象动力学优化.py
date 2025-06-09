@@ -21,6 +21,15 @@ from pathlib import Path
 import subprocess
 import threading
 
+# 导入后台优化工具
+sys.path.append('.')
+try:
+    from utils.background_optimizer import run_background_optimization, check_background_status
+    BACKGROUND_OPTIMIZER_AVAILABLE = True
+except ImportError:
+    BACKGROUND_OPTIMIZER_AVAILABLE = False
+    st.error("❌ 后台优化工具不可用，请检查 utils/background_optimizer.py 文件")
+
 # OpenMM相关导入
 try:
     import openmm
@@ -52,6 +61,13 @@ if 'saved_work_dir' not in st.session_state:
     st.session_state.saved_work_dir = None
 if 'file_size_cache' not in st.session_state:
     st.session_state.file_size_cache = None
+# 新增缓存字段
+if 'file_hash_cache_opt' not in st.session_state:
+    st.session_state.file_hash_cache_opt = None
+if 'scan_timestamp_cache_opt' not in st.session_state:
+    st.session_state.scan_timestamp_cache_opt = None
+if 'manual_scan_requested' not in st.session_state:
+    st.session_state.manual_scan_requested = False
 
 # 确保数据目录存在
 DATA_DIR = "data"
@@ -69,6 +85,43 @@ def get_file_size(file_path_or_obj):
         elif hasattr(file_path_or_obj, 'getvalue'):
             return len(file_path_or_obj.getvalue())
     return 0
+
+def get_file_hash_opt(file_path_or_obj):
+    """获取文件的简单哈希值用于缓存验证"""
+    import hashlib
+    
+    if isinstance(file_path_or_obj, str):
+        if os.path.exists(file_path_or_obj):
+            # 对于文件路径，使用文件修改时间+大小作为哈希
+            stat = os.stat(file_path_or_obj)
+            hash_input = f"{file_path_or_obj}_{stat.st_size}_{stat.st_mtime}"
+            return hashlib.md5(hash_input.encode()).hexdigest()
+    else:
+        # 对于上传文件，使用名称+大小作为哈希
+        if hasattr(file_path_or_obj, 'name') and hasattr(file_path_or_obj, 'size'):
+            hash_input = f"{file_path_or_obj.name}_{file_path_or_obj.size}"
+            return hashlib.md5(hash_input.encode()).hexdigest()
+    return None
+
+def is_cache_valid_opt(file_path_or_obj):
+    """检查优化页面的缓存是否有效"""
+    current_hash = get_file_hash_opt(file_path_or_obj)
+    if not current_hash:
+        return False
+    
+    # 检查是否有缓存的哈希值
+    cached_hash = st.session_state.file_hash_cache_opt
+    cached_identifier = st.session_state.last_processed_file_identifier
+    
+    # 当前文件标识符
+    if isinstance(file_path_or_obj, str):
+        current_identifier = file_path_or_obj
+    else:
+        current_identifier = file_path_or_obj.name if hasattr(file_path_or_obj, 'name') else str(file_path_or_obj)
+    
+    return (current_hash == cached_hash and 
+            current_identifier == cached_identifier and 
+            st.session_state.scan_results_valid)
 
 def generate_work_folder_name(filename):
     """生成工作文件夹名称：日期+随机码"""
@@ -114,6 +167,109 @@ def list_files_in_folder(folder_name):
         return []
     # 只列出SDF文件
     return [f for f in os.listdir(folder_path) if f.lower().endswith('.sdf') and os.path.isfile(os.path.join(folder_path, f))]
+
+def smart_scan_sdf_with_progress(file_to_scan, current_filename):
+    """智能扫描SDF文件，使用进度条显示进度，避免信息刷屏"""
+    
+    file_size = get_file_size(file_to_scan)
+    
+    # 显示文件信息
+    size_mb = file_size / (1024 * 1024)
+    st.info(f"📁 文件大小: {size_mb:.1f} MB")
+    
+    # 创建进度显示区域
+    progress_container = st.container()
+    with progress_container:
+        scan_progress_bar = st.progress(0.0)
+        scan_status = st.empty()
+        scan_metrics = st.columns(3)
+        with scan_metrics[0]:
+            scanned_metric = st.empty()
+        with scan_metrics[1]:
+            valid_metric = st.empty()
+        with scan_metrics[2]:
+            speed_metric = st.empty()
+    
+    # 读取SDF文件
+    if isinstance(file_to_scan, str):
+        supplier = Chem.ForwardSDMolSupplier(file_to_scan, removeHs=False, sanitize=True)
+    else:
+        if hasattr(file_to_scan, 'seek'):
+            file_to_scan.seek(0)
+        sdf_stream = io.BytesIO(file_to_scan.getvalue())
+        supplier = Chem.ForwardSDMolSupplier(sdf_stream, removeHs=False, sanitize=True)
+    
+    # 计算分子数量和预览
+    preview_smiles = []
+    total_conformers = 0
+    start_time = time.time()
+    last_update_time = start_time
+    
+    # 对于大文件，先估算总数
+    estimated_total = None
+    if file_size > LARGE_FILE_THRESHOLD and isinstance(file_to_scan, str):
+        try:
+            # 简单估算：假设每个分子约3KB
+            estimated_total = int(file_size / 3000)
+            scan_status.info(f"🔍 大文件检测：估算约 {estimated_total:,} 个分子")
+        except:
+            pass
+    
+    # 扫描分子
+    for i, mol in enumerate(supplier):
+        if mol is not None:
+            total_conformers += 1
+            # 只收集前面的分子用于预览
+            if i < PREVIEW_SIZE:
+                preview_smiles.append(Chem.MolToSmiles(mol))
+        
+        current_time = time.time()
+        # 限制更新频率，每0.5秒或每1000个分子更新一次
+        if (current_time - last_update_time > 0.5) or ((i + 1) % 1000 == 0):
+            elapsed_time = current_time - start_time
+            
+            # 更新进度
+            if estimated_total:
+                progress = min((i + 1) / estimated_total, 1.0)
+                scan_progress_bar.progress(progress)
+            else:
+                # 对小文件，无法估算，使用心跳效果
+                progress = (i % 100) / 100
+                scan_progress_bar.progress(progress)
+            
+            # 更新指标
+            scanned_metric.metric("已扫描", f"{i + 1:,}")
+            valid_metric.metric("有效分子", f"{total_conformers:,}")
+            
+            if elapsed_time > 0:
+                speed = (i + 1) / elapsed_time
+                speed_metric.metric("扫描速度", f"{speed:.0f}/秒")
+            
+            # 更新状态
+            if estimated_total:
+                scan_status.info(f"🔍 扫描进度: {i + 1:,}/{estimated_total:,} ({progress*100:.1f}%)")
+            else:
+                scan_status.info(f"🔍 正在扫描: {i + 1:,} 个条目")
+            
+            last_update_time = current_time
+    
+    # 完成扫描
+    scan_progress_bar.progress(1.0)
+    elapsed_time = time.time() - start_time
+    
+    scan_status.success(f"✅ 扫描完成：找到 {total_conformers:,} 个构象 (耗时 {elapsed_time:.1f}秒)")
+    scanned_metric.metric("已扫描", f"{i + 1:,}")
+    valid_metric.metric("有效分子", f"{total_conformers:,}")
+    if elapsed_time > 0:
+        speed = (i + 1) / elapsed_time
+        speed_metric.metric("平均速度", f"{speed:.0f}/秒")
+    
+    return {
+        'total_conformers': total_conformers,
+        'preview_smiles': preview_smiles,
+        'scan_successful': total_conformers > 0,
+        'file_size': file_size
+    }
 
 def preprocess_molecule(mol):
     """预处理分子，确保格式正确"""
@@ -849,7 +1005,7 @@ if input_method == "上传新文件":
             st.success(f"使用已保存的文件: {selected_file_path}")
         else:
             # 文件未保存，显示保存按钮
-            if st.button("保存文件到工作目录"):
+            if st.button("保存文件到工作目录", key="save_file_btn"):
                 file_path, work_dir_new = save_uploaded_file(uploaded_file)
                 if file_path:
                     # 保存到session state
@@ -1044,58 +1200,111 @@ if input_ready:
     st.header("文件预览和优化控制")
     st.markdown(f"**当前文件:** `{current_filename}`")
 
-    # 文件预览
-    try:
-        with st.spinner(f"正在扫描SDF文件 '{current_filename}'..."):
-            current_file = uploaded_file if uploaded_file else selected_file_path
-            file_size = get_file_size(current_file)
-            
-            # 显示文件信息
+    # 确定当前文件
+    current_file = uploaded_file if uploaded_file else selected_file_path
+    
+    # 检查缓存有效性
+    cache_valid = is_cache_valid_opt(current_file)
+    
+    # 缓存管理区域
+    if cache_valid:
+        with st.expander("🗂️ 扫描缓存管理", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.session_state.scan_timestamp_cache_opt:
+                    cache_time = time.strftime("%Y-%m-%d %H:%M:%S", 
+                                             time.localtime(st.session_state.scan_timestamp_cache_opt))
+                    st.info(f"缓存时间: {cache_time}")
+            with col2:
+                if st.button("🔄 清除缓存", help="强制重新扫描文件", key="clear_opt_cache"):
+                    # 清除所有相关缓存
+                    st.session_state.scan_results_valid = False
+                    st.session_state.file_hash_cache_opt = None
+                    st.session_state.last_processed_file_identifier = None
+                    st.session_state.scan_timestamp_cache_opt = None
+                    st.session_state.total_potential_mols_cache = 0
+                    st.session_state.preview_data_cache = []
+                    st.session_state.initial_scan_successful_cache = False
+                    st.session_state.manual_scan_requested = False
+                    st.success("✅ 缓存已清除！")
+                    st.rerun()
+    
+    # 显示扫描状态和按钮
+    if cache_valid:
+        st.success("✅ 使用缓存的扫描结果 (文件未变更)")
+        total_conformers = st.session_state.total_potential_mols_cache
+        preview_smiles = st.session_state.preview_data_cache
+        scan_successful = st.session_state.initial_scan_successful_cache
+        file_size = st.session_state.file_size_cache
+        
+        # 显示缓存的结果
+        if total_conformers > 0:
             size_mb = file_size / (1024 * 1024)
-            st.info(f"文件大小: {size_mb:.1f} MB")
+            st.info(f"📁 文件大小: {size_mb:.1f} MB | 📊 构象数量: {total_conformers:,}")
+            st.text_area("构象SMILES预览:", "\n".join(preview_smiles), height=150, key="cached_preview")
+        
+    elif st.session_state.manual_scan_requested:
+        # 执行手动扫描
+        try:
+            scan_result = smart_scan_sdf_with_progress(current_file, current_filename)
             
-            # 读取SDF文件
-            if isinstance(current_file, str):
-                supplier = Chem.ForwardSDMolSupplier(current_file, removeHs=False, sanitize=True)
-            else:
-                if hasattr(current_file, 'seek'):
-                    current_file.seek(0)
-                sdf_stream = io.BytesIO(current_file.getvalue())
-                supplier = Chem.ForwardSDMolSupplier(sdf_stream, removeHs=False, sanitize=True)
-            
-            # 计算分子数量和预览
-            preview_smiles = []
-            total_conformers = 0
-            
-            # 智能扫描策略：对于大文件使用快速计数，小文件完整扫描
-            if file_size > LARGE_FILE_THRESHOLD:  # 大于100MB的文件
-                st.info("🔍 检测到大文件，正在进行快速扫描...")
+            # 更新缓存
+            if scan_result['scan_successful']:
+                current_hash = get_file_hash_opt(current_file)
+                current_identifier = current_file if isinstance(current_file, str) else getattr(current_file, 'name', str(current_file))
                 
-                # 快速计数所有分子
-                for i, mol in enumerate(supplier):
-                    if mol is not None:
-                        total_conformers += 1
-                        # 只收集前面的分子用于预览
-                        if i < PREVIEW_SIZE:
-                            preview_smiles.append(Chem.MolToSmiles(mol))
-                    
-                    # 对于非常大的文件，每1000个分子显示一次进度
-                    if i % 1000 == 0 and i > 0:
-                        st.info(f"已扫描 {i+1} 个构象...")
-            else:
-                # 小文件：完整扫描
-                mols = []
-                for i, mol in enumerate(supplier):
-                    if mol is not None:
-                        mols.append(mol)
-                        if i < PREVIEW_SIZE:
-                            preview_smiles.append(Chem.MolToSmiles(mol))
+                st.session_state.total_potential_mols_cache = scan_result['total_conformers']
+                st.session_state.preview_data_cache = scan_result['preview_smiles']
+                st.session_state.initial_scan_successful_cache = True
+                st.session_state.scan_results_valid = True
+                st.session_state.file_hash_cache_opt = current_hash
+                st.session_state.last_processed_file_identifier = current_identifier
+                st.session_state.scan_timestamp_cache_opt = time.time()
+                st.session_state.file_size_cache = scan_result['file_size']
                 
-                total_conformers = len(mols)
+                # 获取结果
+                total_conformers = scan_result['total_conformers']
+                preview_smiles = scan_result['preview_smiles']
+                scan_successful = True
+                
+                # 显示预览
+                if total_conformers > 0:
+                    st.text_area("构象SMILES预览:", "\n".join(preview_smiles), height=150, key="manual_scan_preview")
+            else:
+                st.session_state.scan_results_valid = False
+                scan_successful = False
+                
+        except Exception as e:
+            st.error(f"扫描文件时出错: {e}")
+            st.session_state.scan_results_valid = False
+            scan_successful = False
             
-            if total_conformers > 0:
+        # 重置扫描请求标志
+        st.session_state.manual_scan_requested = False
+        
+    else:
+        # 显示手动扫描按钮
+        st.info("👆 点击下方按钮开始扫描文件内容")
+        
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("🔍 开始扫描文件", help="扫描SDF文件，统计构象数量", key="start_scan_btn"):
+                st.session_state.manual_scan_requested = True
+                st.rerun()
+        
+        with col2:
+            file_size = get_file_size(current_file)
+            size_mb = file_size / (1024 * 1024)
+            st.info(f"📁 待扫描文件大小: {size_mb:.1f} MB")
+        
+            # 提前退出，不显示优化选项
+        total_conformers = 0
+        scan_successful = False
+    
+    # 只有当扫描成功时才显示优化选项
+    if scan_successful and total_conformers > 0:
                 st.success(f"扫描完成: 找到 {total_conformers} 个构象")
-                st.text_area("构象SMILES预览:", "\n".join(preview_smiles), height=150)
+                st.text_area("构象SMILES预览:", "\n".join(preview_smiles), height=150, key="optimization_preview")
                 
                 # 确定处理限制
                 limit_map = {
@@ -1110,21 +1319,91 @@ if input_ready:
                 # 优化方式选择
                 st.subheader("6. 优化执行方式")
                 
-                execution_method = st.radio(
-                    "选择执行方式:",
-                    ("多进程后台执行 (推荐)", "Streamlit内线程执行"),
-                    help="多进程方式可以充分利用CPU资源，但会在后台运行"
-                )
+                if BACKGROUND_OPTIMIZER_AVAILABLE:
+                    execution_method = st.radio(
+                        "选择执行方式:",
+                        ("智能后台执行 (推荐)", "多进程后台执行 (传统)", "Streamlit内线程执行"),
+                        help="智能后台执行具有断点恢复功能，不受页面刷新影响"
+                    )
+                else:
+                    execution_method = st.radio(
+                        "选择执行方式:",
+                        ("多进程后台执行 (传统)", "Streamlit内线程执行"),
+                        help="多进程方式可以充分利用CPU资源，但会在后台运行"
+                    )
                 
                 # 优化按钮
-                if execution_method == "多进程后台执行 (推荐)":
+                if execution_method == "智能后台执行 (推荐)":
+                    button_label = f"🚀 启动智能后台优化 {processing_limit} 个构象 (支持断点恢复)"
+                elif execution_method == "多进程后台执行 (传统)":
                     button_label = f"🚀 启动多进程优化 {processing_limit} 个构象 (使用 {num_threads} 个进程)"
                 else:
                     button_label = f"优化 {processing_limit} 个构象 (使用 {num_threads} 个线程)"
                 
-                if st.button(button_label):
-                    if execution_method == "多进程后台执行 (推荐)":
-                        # 多进程后台执行
+                if st.button(button_label, key="start_optimization_btn"):
+                    if execution_method == "智能后台执行 (推荐)":
+                        # 智能后台执行
+                        st.info("🚀 准备启动智能后台优化...")
+                        
+                        # 确定输入文件路径
+                        input_file_path = current_file if isinstance(current_file, str) else selected_file_path
+                        abs_input_file_path = os.path.abspath(input_file_path)
+                        
+                        # 确定输出目录
+                        abs_work_dir = os.path.abspath(work_dir) if work_dir else os.getcwd()
+                        
+                        try:
+                            st.info(f"📂 输入文件: {abs_input_file_path}")
+                            st.info(f"📁 输出目录: {abs_work_dir}")
+                            st.info(f"⚙️ 配置: {num_threads}进程, {processing_limit}分子, {optimization_steps}步")
+                            
+                            # 调用智能后台优化工具
+                            script_file, script_name = run_background_optimization(
+                                input_file=abs_input_file_path,
+                                output_dir=abs_work_dir,
+                                processing_limit=processing_limit,
+                                num_threads=num_threads,
+                                optimization_steps=optimization_steps,
+                                detached=True
+                            )
+                            
+                            st.success(f"✅ 智能后台优化已启动！")
+                            st.info(f"📄 脚本文件: {script_file}")
+                            st.info(f"🏷️ 任务名称: {script_name}")
+                            
+                            # 保存任务信息到session state
+                            if 'background_tasks' not in st.session_state:
+                                st.session_state.background_tasks = []
+                            
+                            task_info = {
+                                'script_name': script_name,
+                                'script_file': script_file,
+                                'output_dir': abs_work_dir,
+                                'start_time': time.time(),
+                                'input_file': abs_input_file_path,
+                                'config': {
+                                    'num_threads': num_threads,
+                                    'processing_limit': processing_limit,
+                                    'optimization_steps': optimization_steps
+                                }
+                            }
+                            st.session_state.background_tasks.append(task_info)
+                            
+                            st.success("🎉 任务已添加到后台任务列表，可以安全关闭页面或刷新！")
+                            
+                            # 提供监控命令
+                            log_file = os.path.join(abs_work_dir, f"{script_name}.log")
+                            st.code(f"# 监控命令\ntail -f {log_file}", language="bash")
+                            
+                            # 提供停止命令
+                            st.code(f"# 停止命令\npkill -f {script_name}", language="bash")
+                            
+                        except Exception as e:
+                            st.error(f"❌ 启动智能后台优化失败: {e}")
+                            st.code(str(e), language="text")
+                            
+                    elif execution_method == "多进程后台执行 (传统)":
+                        # 传统多进程后台执行
                         st.info("🚀 准备启动多进程后台优化...")
                         
                         # 生成文件路径
@@ -1444,18 +1723,132 @@ if input_ready:
                                 st.code(sdf_output[:1000], language="text")
                             else:
                                 st.warning("没有成功优化的构象可供输出")
-            else:
-                st.warning("文件中没有找到有效的分子构象")
+                else:
+                    st.warning("文件中没有找到有效的分子构象")
                 
-    except Exception as e:
-        st.error(f"处理文件时出错: {e}")
-        st.error(f"错误类型: {type(e).__name__}")
-        st.error(f"错误详情: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc(), language="text")
 
-# 后台进程监控区域
-st.header("🔍 后台任务监控")
+
+# 智能后台任务监控区域
+if BACKGROUND_OPTIMIZER_AVAILABLE:
+    st.header("🤖 智能后台任务监控")
+    
+    if 'background_tasks' in st.session_state and st.session_state.background_tasks:
+        for idx, task in enumerate(st.session_state.background_tasks):
+            with st.expander(f"📋 任务 {idx+1}: {task['script_name']}", expanded=True):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    elapsed = time.time() - task['start_time']
+                    st.metric("运行时间", f"{elapsed/60:.1f} 分钟")
+                
+                with col2:
+                    # 检查任务状态
+                    status_info = check_background_status(task['output_dir'], task['script_name'])
+                    status_display = {
+                        'running': "🟢 运行中",
+                        'completed': "✅ 已完成",
+                        'error': "❌ 出错",
+                        'unknown': "❓ 未知"
+                    }
+                    st.metric("状态", status_display.get(status_info['status'], "❓ 未知"))
+                
+                with col3:
+                    config = task['config']
+                    st.metric("配置", f"{config['num_threads']}进程/{config['processing_limit']}分子")
+                
+                # 详细信息
+                st.code(f"""
+任务名称: {task['script_name']}
+输入文件: {task['input_file']}
+输出目录: {task['output_dir']}
+脚本文件: {task['script_file']}
+""", language="text")
+                
+                # 操作按钮
+                col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+                
+                with col_btn1:
+                    if st.button(f"📖 查看日志 {idx+1}", key=f"log_{idx}"):
+                        log_file = os.path.join(task['output_dir'], f"{task['script_name']}.log")
+                        if os.path.exists(log_file):
+                            try:
+                                with open(log_file, 'r', encoding='utf-8') as f:
+                                    log_content = f.read()
+                                
+                                # 只显示最后100行
+                                log_lines = log_content.split('\n')
+                                recent_logs = '\n'.join(log_lines[-100:])
+                                st.code(recent_logs, language="text")
+                                
+                            except Exception as e:
+                                st.error(f"读取日志失败: {e}")
+                        else:
+                            st.warning("日志文件不存在")
+                
+                with col_btn2:
+                    if st.button(f"📊 检查结果 {idx+1}", key=f"result_{idx}"):
+                        if status_info['status'] == 'completed':
+                            st.success("🎉 任务已完成！")
+                            st.code(status_info.get('details', ''), language="text")
+                            
+                            # 查找输出文件
+                            output_files = []
+                            for file in os.listdir(task['output_dir']):
+                                if file.startswith('optimized_') and file.endswith('.sdf'):
+                                    output_files.append(file)
+                            
+                            if output_files:
+                                for output_file in output_files:
+                                    full_path = os.path.join(task['output_dir'], output_file)
+                                    file_size = os.path.getsize(full_path) / (1024*1024)
+                                    st.info(f"📄 输出文件: {output_file} ({file_size:.1f} MB)")
+                                    
+                                    # 提供下载按钮
+                                    with open(full_path, 'rb') as f:
+                                        st.download_button(
+                                            f"📥 下载 {output_file}",
+                                            f.read(),
+                                            file_name=output_file,
+                                            mime="chemical/x-mdl-sdfile",
+                                            key=f"download_{idx}_{output_file}"
+                                        )
+                            else:
+                                st.warning("未找到输出文件")
+                                
+                        elif status_info['status'] == 'error':
+                            st.error("❌ 任务执行出错")
+                            st.code(status_info.get('details', ''), language="text")
+                        elif status_info['status'] == 'running':
+                            if 'memory_mb' in status_info:
+                                st.info(f"🔄 任务运行中 (PID: {status_info['pid']}, 内存: {status_info['memory_mb']:.1f}MB)")
+                            else:
+                                st.info("🔄 任务运行中...")
+                        else:
+                            st.warning("❓ 任务状态未知")
+                
+                with col_btn3:
+                    if st.button(f"⛔ 停止任务 {idx+1}", key=f"stop_{idx}"):
+                        if status_info['status'] == 'running' and 'pid' in status_info:
+                            try:
+                                import psutil
+                                process = psutil.Process(int(status_info['pid']))
+                                process.terminate()
+                                st.success(f"✅ 任务 {status_info['pid']} 已停止")
+                            except Exception as e:
+                                st.error(f"停止任务失败: {e}")
+                        else:
+                            st.warning("任务未在运行")
+                
+                with col_btn4:
+                    if st.button(f"🗑️ 删除记录 {idx+1}", key=f"delete_{idx}"):
+                        st.session_state.background_tasks.pop(idx)
+                        st.success("✅ 任务记录已删除")
+                        st.rerun()
+    else:
+        st.info("🔍 当前没有智能后台任务")
+
+# 传统后台进程监控区域
+st.header("🔍 传统后台任务监控")
 
 if hasattr(st.session_state, 'current_process') and st.session_state.current_process:
     process_info = st.session_state.current_process
@@ -1500,7 +1893,7 @@ if hasattr(st.session_state, 'current_process') and st.session_state.current_pro
     col_btn1, col_btn2, col_btn3, col_btn4, col_btn5 = st.columns(5)
     
     with col_btn1:
-        if st.button("📖 查看日志"):
+        if st.button("📖 查看日志", key="view_log_btn"):
             if os.path.exists(process_info['log_path']):
                 try:
                     with open(process_info['log_path'], 'r', encoding='utf-8') as f:
@@ -1518,7 +1911,7 @@ if hasattr(st.session_state, 'current_process') and st.session_state.current_pro
                 st.warning("日志文件尚未生成")
     
     with col_btn2:
-        if st.button("📊 检查完成"):
+        if st.button("📊 检查完成", key="check_completion_btn"):
             done_file = process_info['log_path'] + '.done'
             error_file = process_info['log_path'] + '.error'
             
@@ -1558,11 +1951,11 @@ if hasattr(st.session_state, 'current_process') and st.session_state.current_pro
                 st.info("⏳ 任务仍在运行中...")
     
     with col_btn3:
-        if st.button("🔄 刷新页面"):
+        if st.button("🔄 刷新页面", key="refresh_page_btn"):
             st.rerun()
     
     with col_btn4:
-        if st.button("🗑️ 清除任务"):
+        if st.button("🗑️ 清除任务", key="clear_task_btn"):
             try:
                 # 尝试终止进程
                 process = process_info['process']
@@ -1578,7 +1971,7 @@ if hasattr(st.session_state, 'current_process') and st.session_state.current_pro
                 st.error(f"清除任务失败: {e}")
     
     with col_btn5:
-        if st.button("🔍 Debug信息"):
+        if st.button("🔍 Debug信息", key="debug_info_btn"):
             st.subheader("🔍 Debug信息")
             
             # 显示脚本路径和大小
