@@ -274,6 +274,9 @@ def smart_scan_sdf_with_progress(file_to_scan, current_filename):
 def preprocess_molecule(mol):
     """预处理分子，确保格式正确"""
     try:
+        if mol is None:
+            return None
+            
         # 保存原始分子的属性
         original_props = {}
         for prop_name in mol.GetPropNames():
@@ -282,36 +285,43 @@ def preprocess_molecule(mol):
         # 保存原始分子名称
         original_name = mol.GetProp('_Name') if mol.HasProp('_Name') else None
         
-        # 清理分子
-        mol_clean = Chem.RemoveHs(mol)
-        
-        # 检查是否有3D坐标
-        if mol_clean.GetNumConformers() == 0:
+        # 检查是否有3D坐标 - 在添加氢之前检查
+        if mol.GetNumConformers() == 0:
             return None
             
         # 检查坐标有效性
-        conf = mol_clean.GetConformer()
-        for i in range(mol_clean.GetNumAtoms()):
-            pos = conf.GetAtomPosition(i)
-            if not all(np.isfinite([pos.x, pos.y, pos.z])):
-                return None
+        try:
+            conf = mol.GetConformer()
+            for i in range(mol.GetNumAtoms()):
+                pos = conf.GetAtomPosition(i)
+                if not all(np.isfinite([pos.x, pos.y, pos.z])):
+                    return None
+        except:
+            return None
+        
+        # 创建分子副本，移除氢原子再重新添加以确保正确的氢原子位置
+        mol_copy = Chem.Mol(mol)
         
         # 进行基本的分子清理
         try:
-            Chem.SanitizeMol(mol_clean)
+            Chem.SanitizeMol(mol_copy)
         except:
+            return None
+        
+        # 验证分子结构
+        if mol_copy.GetNumAtoms() == 0:
             return None
         
         # 恢复所有原始属性
         for prop_name, prop_value in original_props.items():
-            mol_clean.SetProp(prop_name, prop_value)
+            mol_copy.SetProp(prop_name, prop_value)
         
         # 恢复原始名称
         if original_name is not None:
-            mol_clean.SetProp('_Name', original_name)
+            mol_copy.SetProp('_Name', original_name)
             
-        return mol_clean
-    except:
+        return mol_copy
+    except Exception as e:
         return None
 
 def mol_to_pdb_string(mol, conf_id=0):
@@ -336,8 +346,13 @@ def optimize_molecule_with_rdkit_and_openmm(mol, conf_id=0, steps=1000, temperat
         if mol.HasProp('_Name'):
             mol_copy.SetProp('_Name', mol.GetProp('_Name'))
         
-        # 添加氢原子
-        mol_with_h = Chem.AddHs(mol_copy)
+        # 添加氢原子并保留3D坐标
+        mol_with_h = Chem.AddHs(mol_copy, addCoords=True)
+        
+        # 检查是否成功添加氢原子
+        if mol_with_h is None or mol_with_h.GetNumConformers() == 0:
+            # 如果添加氢原子失败，尝试直接优化原分子
+            mol_with_h = mol_copy
         
         # 使用MMFF94进行优化
         try:
@@ -345,21 +360,27 @@ def optimize_molecule_with_rdkit_and_openmm(mol, conf_id=0, steps=1000, temperat
             if mmff_props is not None:
                 ff = AllChem.MMFFGetMoleculeForceField(mol_with_h, mmff_props)
                 if ff is not None:
-                    ff.Minimize(maxIts=steps)
-                    # 移除氢原子，更新原始分子坐标
-                    conf_with_h = mol_with_h.GetConformer()
-                    conf_orig = mol_copy.GetConformer(conf_id)
+                    convergence_result = ff.Minimize(maxIts=steps)
                     
-                    heavy_idx = 0
-                    for i in range(mol_with_h.GetNumAtoms()):
-                        atom = mol_with_h.GetAtomWithIdx(i)
-                        if atom.GetAtomicNum() != 1:  # 非氢原子
-                            if heavy_idx < mol_copy.GetNumAtoms():
-                                pos = conf_with_h.GetAtomPosition(i)
-                                conf_orig.SetAtomPosition(heavy_idx, pos)
-                                heavy_idx += 1
+                    # 如果添加了氢原子，需要将坐标映射回原分子
+                    if mol_with_h.GetNumAtoms() != mol_copy.GetNumAtoms():
+                        # 移除氢原子，更新原始分子坐标
+                        conf_with_h = mol_with_h.GetConformer()
+                        conf_orig = mol_copy.GetConformer(conf_id)
+                        
+                        heavy_idx = 0
+                        for i in range(mol_with_h.GetNumAtoms()):
+                            atom = mol_with_h.GetAtomWithIdx(i)
+                            if atom.GetAtomicNum() != 1:  # 非氢原子
+                                if heavy_idx < mol_copy.GetNumAtoms():
+                                    pos = conf_with_h.GetAtomPosition(i)
+                                    conf_orig.SetAtomPosition(heavy_idx, pos)
+                                    heavy_idx += 1
+                    else:
+                        # 没有添加氢原子，直接使用优化后的坐标
+                        mol_copy = mol_with_h
                     
-                    return {'mol': mol_copy, 'success': True, 'message': "MMFF94优化成功"}
+                    return {'mol': mol_copy, 'success': True, 'message': f"MMFF94优化成功(收敛:{convergence_result})"}
                 else:
                     return {'mol': None, 'success': False, 'message': "无法创建MMFF94力场"}
             else:
@@ -698,12 +719,31 @@ def preprocess_molecule(mol):
         # 保存原始分子名称
         original_name = mol.GetProp('_Name') if mol.HasProp('_Name') else None
         
-        # 添加氢原子（如果还没有）
-        mol_clean = Chem.AddHs(mol)
-        
-        # 检查是否有3D坐标
-        if mol_clean.GetNumConformers() == 0:
+        # 检查是否有3D坐标 - 在处理之前检查原分子
+        if mol.GetNumConformers() == 0:
             logger.warning("分子缺少3D坐标，跳过")
+            return None
+            
+        # 检查坐标有效性
+        try:
+            conf = mol.GetConformer()
+            for i in range(mol.GetNumAtoms()):
+                pos = conf.GetAtomPosition(i)
+                if not all([abs(pos.x) < 999, abs(pos.y) < 999, abs(pos.z) < 999]):
+                    logger.warning("分子坐标异常，跳过")
+                    return None
+        except:
+            logger.warning("无法获取分子坐标，跳过")
+            return None
+        
+        # 创建分子副本
+        mol_clean = Chem.Mol(mol)
+        
+        # 进行基本的分子清理
+        try:
+            Chem.SanitizeMol(mol_clean)
+        except:
+            logger.warning("分子清理失败，跳过")
             return None
         
         # 验证分子结构
@@ -738,22 +778,48 @@ def optimize_molecule_rdkit(mol, conf_id=0, steps=1000):
         if mol.HasProp('_Name'):
             mol_copy.SetProp('_Name', mol.GetProp('_Name'))
         
+        # 添加氢原子并保留3D坐标
+        mol_with_h = Chem.AddHs(mol_copy, addCoords=True)
+        
+        # 检查是否成功添加氢原子
+        if mol_with_h is None or mol_with_h.GetNumConformers() == 0:
+            # 如果添加氢原子失败，尝试直接优化原分子
+            mol_with_h = mol_copy
+        
         # 使用MMFF94力场优化
-        mp = AllChem.MMFFGetMoleculeProperties(mol_copy)
-        if mp is None:
-            return {{'mol': None, 'success': False, 'message': 'MMFF94力场初始化失败'}}
-        
-        ff = AllChem.MMFFGetMoleculeForceField(mol_copy, mp, confId=conf_id)
-        if ff is None:
-            return {{'mol': None, 'success': False, 'message': 'MMFF94力场创建失败'}}
-        
-        # 执行优化
-        converged = ff.Minimize(maxIts=steps)
-        
-        if converged == 0:
-            return {{'mol': mol_copy, 'success': True, 'message': '优化成功'}}
-        else:
-            return {{'mol': mol_copy, 'success': True, 'message': f'优化完成（收敛代码: {{converged}}）'}}
+        try:
+            mp = AllChem.MMFFGetMoleculeProperties(mol_with_h)
+            if mp is None:
+                return {{'mol': None, 'success': False, 'message': 'MMFF94力场初始化失败'}}
+            
+            ff = AllChem.MMFFGetMoleculeForceField(mol_with_h, mp, confId=conf_id)
+            if ff is None:
+                return {{'mol': None, 'success': False, 'message': 'MMFF94力场创建失败'}}
+            
+            # 执行优化
+            converged = ff.Minimize(maxIts=steps)
+            
+            # 如果添加了氢原子，需要将坐标映射回原分子
+            if mol_with_h.GetNumAtoms() != mol_copy.GetNumAtoms():
+                # 移除氢原子，更新原始分子坐标
+                conf_with_h = mol_with_h.GetConformer()
+                conf_orig = mol_copy.GetConformer(conf_id)
+                
+                heavy_idx = 0
+                for i in range(mol_with_h.GetNumAtoms()):
+                    atom = mol_with_h.GetAtomWithIdx(i)
+                    if atom.GetAtomicNum() != 1:  # 非氢原子
+                        if heavy_idx < mol_copy.GetNumAtoms():
+                            pos = conf_with_h.GetAtomPosition(i)
+                            conf_orig.SetAtomPosition(heavy_idx, pos)
+                            heavy_idx += 1
+            else:
+                # 没有添加氢原子，直接使用优化后的坐标
+                mol_copy = mol_with_h
+            
+            return {{'mol': mol_copy, 'success': True, 'message': f'优化成功(收敛代码:{{converged}})'}}
+        except Exception as e:
+            return {{'mol': None, 'success': False, 'message': f'MMFF94优化失败: {{str(e)}}'}}
             
     except Exception as e:
         return {{'mol': None, 'success': False, 'message': f'优化异常: {{str(e)}}'}}

@@ -145,11 +145,27 @@ def preprocess_molecule(mol):
         # 保存原始分子名称
         original_name = mol.GetProp('_Name') if mol.HasProp('_Name') else None
         
-        # 添加氢原子（如果还没有）
-        mol_clean = Chem.AddHs(mol)
+        # 检查是否有3D坐标 - 在处理之前检查原分子
+        if mol.GetNumConformers() == 0:
+            return None
+            
+        # 检查坐标有效性
+        try:
+            conf = mol.GetConformer()
+            for i in range(mol.GetNumAtoms()):
+                pos = conf.GetAtomPosition(i)
+                if not all([abs(pos.x) < 999, abs(pos.y) < 999, abs(pos.z) < 999]):
+                    return None
+        except:
+            return None
         
-        # 检查是否有3D坐标
-        if mol_clean.GetNumConformers() == 0:
+        # 创建分子副本
+        mol_clean = Chem.Mol(mol)
+        
+        # 进行基本的分子清理
+        try:
+            Chem.SanitizeMol(mol_clean)
+        except:
             return None
         
         # 验证分子结构
@@ -182,22 +198,48 @@ def optimize_molecule_rdkit(mol, conf_id=0, steps=1000):
         if mol.HasProp('_Name'):
             mol_copy.SetProp('_Name', mol.GetProp('_Name'))
         
+        # 添加氢原子并保留3D坐标
+        mol_with_h = Chem.AddHs(mol_copy, addCoords=True)
+        
+        # 检查是否成功添加氢原子
+        if mol_with_h is None or mol_with_h.GetNumConformers() == 0:
+            # 如果添加氢原子失败，尝试直接优化原分子
+            mol_with_h = mol_copy
+        
         # 使用MMFF94力场优化
-        mp = AllChem.MMFFGetMoleculeProperties(mol_copy)
-        if mp is None:
-            return {{'mol': None, 'success': False, 'message': 'MMFF94力场初始化失败'}}
-        
-        ff = AllChem.MMFFGetMoleculeForceField(mol_copy, mp, confId=conf_id)
-        if ff is None:
-            return {{'mol': None, 'success': False, 'message': 'MMFF94力场创建失败'}}
-        
-        # 执行优化
-        converged = ff.Minimize(maxIts=steps)
-        
-        if converged == 0:
-            return {{'mol': mol_copy, 'success': True, 'message': '优化成功'}}
-        else:
-            return {{'mol': mol_copy, 'success': True, 'message': f'优化完成（收敛代码: {{converged}}）'}}
+        try:
+            mp = AllChem.MMFFGetMoleculeProperties(mol_with_h)
+            if mp is None:
+                return {{'mol': None, 'success': False, 'message': 'MMFF94力场初始化失败'}}
+            
+            ff = AllChem.MMFFGetMoleculeForceField(mol_with_h, mp, confId=conf_id)
+            if ff is None:
+                return {{'mol': None, 'success': False, 'message': 'MMFF94力场创建失败'}}
+            
+            # 执行优化
+            converged = ff.Minimize(maxIts=steps)
+            
+            # 如果添加了氢原子，需要将坐标映射回原分子
+            if mol_with_h.GetNumAtoms() != mol_copy.GetNumAtoms():
+                # 移除氢原子，更新原始分子坐标
+                conf_with_h = mol_with_h.GetConformer()
+                conf_orig = mol_copy.GetConformer(conf_id)
+                
+                heavy_idx = 0
+                for i in range(mol_with_h.GetNumAtoms()):
+                    atom = mol_with_h.GetAtomWithIdx(i)
+                    if atom.GetAtomicNum() != 1:  # 非氢原子
+                        if heavy_idx < mol_copy.GetNumAtoms():
+                            pos = conf_with_h.GetAtomPosition(i)
+                            conf_orig.SetAtomPosition(heavy_idx, pos)
+                            heavy_idx += 1
+            else:
+                # 没有添加氢原子，直接使用优化后的坐标
+                mol_copy = mol_with_h
+            
+            return {{'mol': mol_copy, 'success': True, 'message': f'优化成功(收敛代码:{{converged}})'}}
+        except Exception as e:
+            return {{'mol': None, 'success': False, 'message': f'MMFF94优化失败: {{str(e)}}'}}
             
     except Exception as e:
         return {{'mol': None, 'success': False, 'message': f'优化异常: {{str(e)}}'}}
@@ -215,13 +257,26 @@ def optimize_single_molecule(args):
         result = optimize_molecule_rdkit(mol, 0, steps)
         
         # 返回时也需要包含属性信息，因为分子对象在返回时会再次丢失属性
-        return {{
-            'orig_idx': orig_idx,
-            'mol': result['mol'] if result['success'] else None,
-            'mol_props': mol_props if result['success'] else None,  # 返回属性信息
-            'success': result['success'],
-            'message': result['message']
-        }}
+        # 确保mol_props总是有效的字典（即使为空）
+        if result['success']:
+            # 如果mol_props为空，添加一个默认属性确保不会被误判为失败
+            if not mol_props:
+                mol_props = {{'optimization_status': 'completed'}}
+            return {{
+                'orig_idx': orig_idx,
+                'mol': result['mol'],
+                'mol_props': mol_props,
+                'success': True,
+                'message': result['message']
+            }}
+        else:
+            return {{
+                'orig_idx': orig_idx,
+                'mol': None,
+                'mol_props': None,
+                'success': False,
+                'message': result['message']
+            }}
     except Exception as e:
         return {{
             'orig_idx': orig_idx,
@@ -290,6 +345,14 @@ def main():
                 for prop_name in processed_mol.GetPropNames():
                     mol_props[prop_name] = processed_mol.GetProp(prop_name)
                 
+                # 特别处理_Name属性（不会出现在GetPropNames中）
+                if processed_mol.HasProp('_Name'):
+                    mol_props['_Name'] = processed_mol.GetProp('_Name')
+                
+                # 确保每个分子至少有一个标识属性，避免空字典被误判为失败
+                if not mol_props:
+                    mol_props['molecule_id'] = f'mol_{{start_idx + len(mols_to_optimize)}}'
+                
                 mols_to_optimize.append(((processed_mol, mol_props), start_idx + len(mols_to_optimize)))
             else:
                 skipped_count += 1
@@ -319,12 +382,15 @@ def main():
             results.append(result_data)
             completed += 1
             
-            if result_data['success'] and result_data['mol'] and result_data['mol_props']:
+            if result_data['success'] and result_data['mol'] is not None:
                 # 恢复分子属性（因为从子进程返回时属性丢失）
                 mol = result_data['mol']
                 mol_props = result_data['mol_props']
-                for prop_name, prop_value in mol_props.items():
-                    mol.SetProp(prop_name, prop_value)
+                
+                # 如果有属性，则恢复；空字典也是有效的（表示没有额外属性）
+                if mol_props is not None:
+                    for prop_name, prop_value in mol_props.items():
+                        mol.SetProp(prop_name, prop_value)
                 
                 optimized_mols.append(mol)
                 success_count += 1

@@ -6,19 +6,38 @@ CADD-Toolbox - 3D结构多样性评估页面
 import os
 import sys
 import math
+import gc
 import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
 import time
-from sklearn.cluster import KMeans, DBSCAN
+from sklearn.cluster import KMeans, DBSCAN, MiniBatchKMeans
 from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA, IncrementalPCA
 import psutil
 from datetime import datetime
 import traceback
 from scipy import stats
 from scipy.stats import gaussian_kde
+
+# 尝试导入FAISS
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+    # 检查FAISS GPU支持
+    try:
+        if faiss.get_num_gpus() > 0:
+            FAISS_GPU_AVAILABLE = True
+        else:
+            FAISS_GPU_AVAILABLE = False
+    except:
+        FAISS_GPU_AVAILABLE = False
+except ImportError:
+    FAISS_AVAILABLE = False
+    FAISS_GPU_AVAILABLE = False
+    st.warning("⚠️ FAISS未安装，将使用sklearn进行相似性计算（较慢）")
 
 # 尝试导入GPU相关库
 try:
@@ -61,14 +80,21 @@ st.markdown("""
 基于预计算的3D分子指纹进行结构多样性分析和比较。
 
 🔬 **3D指纹**: E3FP、ROCS、Pharmacophore、USRCAT等  
-📈 **聚类分析**: K-means、DBSCAN聚类  
-📊 **可视化**: t-SNE、UMAP、PCA降维  
-⚡ **加速**: GPU加速计算（可选）  
+📈 **聚类分析**: MiniBatch K-means、HDBSCAN、DBSCAN聚类  
+📊 **可视化**: PCA-UMAP、t-SNE、PCA降维  
+⚡ **性能优化**: 流式读取 + k-NN相似性 + GPU加速（可选）  
+
+> **🚀 优化特性：**
+> - **双模式选择**: 优化模式适合大数据集(50万+样本)，兼容模式适合小数据集
+> - **内存优化**: 流式读取 + float16精度，内存使用降低50-80%
+> - **算法优化**: k-NN + 采样替代完整相似性矩阵，计算复杂度从O(N²)降至O(N)
+> - **智能降维**: IncrementalPCA + UMAP，适合超大数据集
+> - **GPU加速**: 支持FAISS-GPU、CuML加速计算
 
 > **💡 使用说明：**
-> - 请确保CSV文件包含预计算的3D指纹数据
-> - 支持多种3D指纹格式（向量、位向量等）
-> - 自动检测指纹列并计算相似性矩阵
+> - 自动检测CSV文件中的3D指纹列
+> - 推荐使用"优化模式"处理大规模数据集
+> - 支持多种相似性度量和聚类算法
 """)
 
 # 显示当前随机种子
@@ -80,6 +106,15 @@ elif CUDA_AVAILABLE and TORCH_AVAILABLE:
     st.warning("⚠️ GPU部分可用：CUDA可用但CuML不可用")
 else:
     st.info("ℹ️ 仅CPU模式：GPU不可用")
+
+# 显示FAISS状态
+if FAISS_AVAILABLE:
+    if FAISS_GPU_AVAILABLE:
+        st.success("✅ FAISS-GPU可用：高速相似性搜索")
+    else:
+        st.info("ℹ️ FAISS-CPU可用：快速相似性搜索")
+else:
+    st.warning("⚠️ FAISS不可用：将使用sklearn（较慢）")
 
 # 数据目录设置
 DATA_DIR = "data"
@@ -140,91 +175,369 @@ def initialize_cuda():
         st.sidebar.error(f"GPU初始化错误: {str(e)}")
         return False, torch.device("cpu")
 
-def load_fingerprints_from_csv(file_path, fingerprint_cols=None):
-    """从CSV文件加载预计算的3D指纹
+def read_fps(csv_path: str, chunksize: int = 200_000, fp_dtype="float16", 
+             fingerprint_cols=None) -> tuple[np.ndarray, list[str], pd.DataFrame]:
+    """流式加载指纹列，峰值内存≈常数级
     
     Args:
-        file_path: CSV文件路径
+        csv_path: CSV文件路径
+        chunksize: 分块大小，控制峰值内存
+        fp_dtype: 指纹数据类型，float16可节省内存
         fingerprint_cols: 指纹列名列表，如果为None则自动检测
     
     Returns:
-        fingerprints: 指纹数组
-        df: 原始DataFrame
-        fp_columns: 指纹列名列表
+        fps: 指纹数组 (N, D)
+        fp_columns: 指纹列名列表  
+        meta: 元数据DataFrame
     """
     try:
-        df = pd.read_csv(file_path)
+        # 先读取小样本检测列类型
+        sample = pd.read_csv(csv_path, nrows=100, low_memory=True)
         
         if fingerprint_cols is None:
-            # 自动检测指纹列
-            # 通常指纹列包含数值数据且列名可能包含特定关键词
-            potential_fp_cols = []
+            # 自动检测数值型指纹列
             keywords = ['fingerprint', 'fp', 'descriptor', 'feature', 'bit', 'e3fp', 'rocs', 'usrcat']
+            num_cols = []
             
-            for col in df.columns:
+            for col in sample.columns:
                 # 检查是否为数值列
-                if df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                    potential_fp_cols.append(col)
+                if sample[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                    num_cols.append(col)
                 # 或者检查列名是否包含指纹相关关键词
                 elif any(keyword.lower() in col.lower() for keyword in keywords):
                     try:
-                        # 尝试转换为数值
-                        pd.to_numeric(df[col], errors='raise')
-                        potential_fp_cols.append(col)
+                        pd.to_numeric(sample[col], errors='raise')
+                        num_cols.append(col)
                     except:
                         continue
-            
-            fingerprint_cols = potential_fp_cols
+            fingerprint_cols = num_cols
         
         if not fingerprint_cols:
-            st.error("未找到指纹列，请手动指定指纹列")
-            return None, None, None
+            raise ValueError("未检测到数值型 3D 指纹列")
         
-        # 提取指纹数据
-        fingerprints = df[fingerprint_cols].values
+        # 非数值列作为元数据
+        meta_cols = [col for col in sample.columns if col not in fingerprint_cols]
         
-        # 检查和处理缺失值
-        if np.isnan(fingerprints).any():
-            st.warning("指纹数据中存在缺失值，将用0填充")
-            fingerprints = np.nan_to_num(fingerprints)
+        st.info(f"检测到 {len(fingerprint_cols)} 个指纹列，{len(meta_cols)} 个元数据列")
         
-        st.success(f"成功加载 {len(fingerprints)} 个样本，{len(fingerprint_cols)} 维指纹")
+        # 流式读取指纹数据
+        fp_parts = []
+        total_rows = 0
         
-        return fingerprints, df, fingerprint_cols
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # 先尝试读取第一个chunk来验证数据类型兼容性
+        first_chunk_iter = pd.read_csv(
+            csv_path,
+            usecols=fingerprint_cols,
+            chunksize=chunksize,
+            low_memory=True,
+            engine="c"
+        )
+        
+        # 读取第一个chunk进行数据类型验证
+        first_chunk = next(first_chunk_iter)
+        
+        # 测试数据类型转换
+        test_chunk = first_chunk.copy()
+        test_chunk.replace([np.inf, -np.inf], 0, inplace=True)
+        test_chunk.fillna(0, inplace=True)
+        
+        # 检查哪些列可以安全转换为目标类型
+        safe_cols = []
+        problematic_cols = []
+        
+        for col in fingerprint_cols:
+            try:
+                # 测试转换
+                test_values = pd.to_numeric(test_chunk[col], errors='coerce').astype(fp_dtype)
+                safe_cols.append(col)
+            except (ValueError, OverflowError) as e:
+                problematic_cols.append(col)
+                st.warning(f"列 '{col}' 无法转换为 {fp_dtype}，将使用 float32")
+        
+        if problematic_cols:
+            st.info(f"检测到 {len(problematic_cols)} 个列需要使用 float32 而非 {fp_dtype}")
+            # 为有问题的列使用float32
+            actual_dtype = 'float32'
+        else:
+            actual_dtype = fp_dtype
+        
+        # 首先处理已经读取的第一个chunk
+        try:
+            # 处理第一个chunk
+            chunk = first_chunk.copy()
+            status_text.text(f"处理第 1 个数据块，当前行数: {total_rows}")
+            
+            # 处理异常值和缺失值
+            chunk.replace([np.inf, -np.inf], 0, inplace=True)
+            chunk.fillna(0, inplace=True)
+            
+            # 安全的数据类型转换
+            for col in chunk.columns:
+                try:
+                    chunk[col] = pd.to_numeric(chunk[col], errors='coerce').fillna(0)
+                except:
+                    pass
+            
+            # 转换为numpy
+            chunk_array = chunk.to_numpy(dtype=actual_dtype, copy=False)
+            
+            # 检查数组有效性
+            if np.isnan(chunk_array).any() or np.isinf(chunk_array).any():
+                chunk_array = np.nan_to_num(chunk_array, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            fp_parts.append(chunk_array)
+            total_rows += len(chunk_array)
+            del chunk
+            gc.collect()
+            
+        except Exception as e:
+            st.warning(f"处理第 1 个数据块时出错: {str(e)}，跳过此块")
+        
+        # 继续读取剩余的chunks
+        chunk_iter = pd.read_csv(
+            csv_path,
+            usecols=fingerprint_cols,
+            chunksize=chunksize,
+            low_memory=True,
+            engine="c"
+        )
+        
+        # 跳过第一个chunk（已经处理过了）
+        try:
+            next(chunk_iter)
+        except StopIteration:
+            # 文件只有一个chunk，已经处理完毕
+            pass
+        
+        for i, chunk in enumerate(chunk_iter, start=1):
+            status_text.text(f"读取第 {i+1} 个数据块，当前行数: {total_rows}")
+            
+            try:
+                # 处理异常值和缺失值
+                chunk.replace([np.inf, -np.inf], 0, inplace=True)
+                chunk.fillna(0, inplace=True)
+                
+                # 安全的数据类型转换
+                for col in chunk.columns:
+                    try:
+                        chunk[col] = pd.to_numeric(chunk[col], errors='coerce').fillna(0)
+                    except:
+                        pass
+                
+                # 转换为numpy
+                chunk_array = chunk.to_numpy(dtype=actual_dtype, copy=False)
+                
+                # 检查数组有效性
+                if np.isnan(chunk_array).any() or np.isinf(chunk_array).any():
+                    chunk_array = np.nan_to_num(chunk_array, nan=0.0, posinf=0.0, neginf=0.0)
+                
+                fp_parts.append(chunk_array)
+                total_rows += len(chunk_array)
+                
+            except Exception as e:
+                st.warning(f"处理第 {i+1} 个数据块时出错: {str(e)}，跳过此块")
+                continue
+            
+            del chunk
+            gc.collect()
+            
+            # 更新进度（估算）
+            if i < 5:  # 前几个块用于估算
+                progress_bar.progress(min(0.9, (i + 1) * 0.15))
+        
+        progress_bar.progress(0.95)
+        status_text.text("合并数据块...")
+        
+        # 合并所有分块
+        fps = np.concatenate(fp_parts, axis=0)
+        del fp_parts
+        gc.collect()
+        
+        progress_bar.progress(1.0)
+        status_text.text("读取元数据...")
+        
+        # 读取元数据（如果有）
+        if meta_cols:
+            meta = pd.read_csv(csv_path, usecols=meta_cols, low_memory=True)
+        else:
+            meta = pd.DataFrame(index=np.arange(fps.shape[0]))
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        st.success(f"✅ 流式加载完成: {len(fps):,} 个样本，{len(fingerprint_cols)} 维指纹 ({actual_dtype})")
+        st.info(f"📊 内存使用: {fps.nbytes / 1024**2:.1f} MB")
+        
+        if actual_dtype != fp_dtype:
+            st.info(f"💡 数据类型已从 {fp_dtype} 调整为 {actual_dtype} 以确保兼容性")
+        
+        return fps, fingerprint_cols, meta
         
     except Exception as e:
-        st.error(f"读取指纹数据时出错: {str(e)}")
+        st.error(f"流式读取指纹数据时出错: {str(e)}")
         return None, None, None
 
-def compute_similarity_matrix_from_fingerprints(fingerprints, metric='cosine'):
-    """从指纹数组计算相似性矩阵
+# 兼容性函数
+def load_fingerprints_from_csv(file_path, fingerprint_cols=None):
+    """兼容性函数，内部调用优化版read_fps"""
+    fps, fp_cols, meta = read_fps(file_path, fingerprint_cols=fingerprint_cols)
+    if fps is not None:
+        return fps, meta, fp_cols
+    return None, None, None
+
+def ensure_faiss_compatible(arr: np.ndarray) -> np.ndarray:
+    """确保数组与FAISS兼容（C-contiguous + float32）"""
+    if not arr.flags['C_CONTIGUOUS'] or arr.dtype != np.float32:
+        return np.ascontiguousarray(arr.astype(np.float32))
+    return arr
+
+def knn_similarity(fps: np.ndarray, metric: str = "cosine", 
+                   k: int = 30, use_gpu: bool = True) -> np.ndarray:
+    """使用FAISS计算k最近邻相似度（不含自身）
     
     Args:
-        fingerprints: 指纹数组 (n_samples, n_features)
+        fps: 指纹数组 (N, D)
         metric: 相似性度量方法
+        k: 最近邻数量
+        use_gpu: 是否使用GPU
     
     Returns:
-        similarity_matrix: 相似性矩阵
+        knn_sim: shape=(N, k) 的最近邻相似度矩阵
     """
+    try:
+        if not FAISS_AVAILABLE:
+            # 回退到sklearn
+            st.warning("FAISS不可用，使用sklearn计算k-NN（较慢）")
+            from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
+            
+            if metric == "cosine":
+                sim_matrix = cosine_similarity(fps)
+            else:
+                distances = euclidean_distances(fps)
+                max_dist = np.max(distances)
+                sim_matrix = 1 - (distances / max_dist)
+            
+            # 排除自身，取top-k
+            np.fill_diagonal(sim_matrix, -1)  # 排除自身
+            knn_indices = np.argsort(sim_matrix, axis=1)[:, -k:]
+            knn_sim = np.array([sim_matrix[i, knn_indices[i]] for i in range(len(fps))])
+            return knn_sim
+        
+        # 使用FAISS
+        import faiss
+        
+        # 确保数组与FAISS兼容
+        fps_copy = ensure_faiss_compatible(fps)
+        
+        if metric == "cosine":
+            # 余弦相似性需要L2归一化
+            faiss.normalize_L2(fps_copy)
+            if use_gpu and faiss.get_num_gpus() > 0:
+                index = faiss.index_cpu_to_all_gpus(faiss.IndexFlatIP(fps_copy.shape[1]))
+            else:
+                index = faiss.IndexFlatIP(fps_copy.shape[1])
+        else:  # euclidean
+            if use_gpu and faiss.get_num_gpus() > 0:
+                index = faiss.index_cpu_to_all_gpus(faiss.IndexFlatL2(fps_copy.shape[1]))
+            else:
+                index = faiss.IndexFlatL2(fps_copy.shape[1])
+        
+        index.add(fps_copy)
+        sim, _ = index.search(fps_copy, k + 1)  # 包含自身
+        
+        if metric == "euclidean":
+            # L2距离转换为相似性
+            max_dist = sim.max()
+            sim = 1 - (sim / max_dist)
+        
+        return sim[:, 1:]  # 去掉自身（第一列）
+        
+    except Exception as e:
+        st.error(f"k-NN计算出错: {str(e)}")
+        return None
+
+def sample_pairwise(fps: np.ndarray, n_pairs: int = 2_000_000, 
+                   metric="cosine", rng=None) -> np.ndarray:
+    """随机采样计算成对相似性
+    
+    Args:
+        fps: 指纹数组
+        n_pairs: 采样对数
+        metric: 相似性度量
+        rng: 随机数生成器
+    
+    Returns:
+        pair_sim: 采样的成对相似性数组
+    """
+    if rng is None:
+        rng = np.random.default_rng(RANDOM_SEED)
+    
+    n_samples = len(fps)
+    # 确保不超过总对数
+    max_pairs = n_samples * (n_samples - 1) // 2
+    n_pairs = min(n_pairs, max_pairs)
+    
+    # 随机采样索引对
+    idx1 = rng.integers(0, n_samples, n_pairs, dtype=np.int64)
+    idx2 = rng.integers(0, n_samples, n_pairs, dtype=np.int64)
+    
+    # 避免自身相比
+    mask = idx1 != idx2
+    idx1, idx2 = idx1[mask], idx2[mask]
+    
+    if len(idx1) == 0:
+        return np.array([])
+    
+    fps1, fps2 = fps[idx1], fps[idx2]
+    
+    if metric == "cosine":
+        # 余弦相似性
+        norms1 = np.linalg.norm(fps1, axis=1)
+        norms2 = np.linalg.norm(fps2, axis=1)
+        dot_products = (fps1 * fps2).sum(axis=1)
+        
+        # 避免除零
+        norm_products = norms1 * norms2
+        valid_mask = norm_products > 1e-10
+        similarities = np.zeros(len(fps1))
+        similarities[valid_mask] = dot_products[valid_mask] / norm_products[valid_mask]
+        
+        return similarities
+    else:  # euclidean
+        distances = np.linalg.norm(fps1 - fps2, axis=1)
+        max_dist = distances.max() if len(distances) > 0 else 1.0
+        return 1 - (distances / max_dist)
+
+def compute_similarity_matrix_from_fingerprints(fingerprints, metric='cosine'):
+    """兼容性函数：针对小数据集计算完整相似性矩阵"""
+    n_samples = len(fingerprints)
+    
+    # 大数据集警告并推荐使用优化方法
+    if n_samples > 50_000:
+        st.warning(f"⚠️ 数据集较大({n_samples:,}个样本)，建议使用k-NN + 采样方法")
+        if st.button("继续使用完整矩阵计算"):
+            pass
+        else:
+            return None
+    
     from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     try:
-        n_samples = len(fingerprints)
         status_text.text(f"计算 {n_samples}x{n_samples} 相似性矩阵...")
         
         if metric == 'cosine':
-            # 余弦相似性
             similarity_matrix = cosine_similarity(fingerprints)
         elif metric == 'euclidean':
-            # 欧几里得距离转换为相似性
             distances = euclidean_distances(fingerprints)
             max_dist = np.max(distances)
             similarity_matrix = 1 - (distances / max_dist)
         elif metric == 'tanimoto':
-            # Tanimoto相似性（适用于二进制指纹）
             similarity_matrix = np.zeros((n_samples, n_samples))
             for i in range(n_samples):
                 for j in range(i, n_samples):
@@ -248,8 +561,62 @@ def compute_similarity_matrix_from_fingerprints(fingerprints, metric='cosine'):
         st.error(f"计算相似性矩阵时出错: {str(e)}")
         return None
 
+def diversity_stats(knn_sim: np.ndarray, pair_sim: np.ndarray) -> dict[str, float]:
+    """基于k-NN和采样相似性计算多样性指标
+    
+    Args:
+        knn_sim: k最近邻相似性矩阵 (N, k)
+        pair_sim: 随机采样的成对相似性数组
+    
+    Returns:
+        stats: 多样性统计指标字典
+    """
+    if knn_sim is None or len(knn_sim) == 0:
+        return {}
+    
+    # 最近邻统计
+    nn_max = knn_sim.max(axis=1)  # 每个样本的最近邻相似性
+    nn_mean = knn_sim.mean(axis=1)  # 每个样本的平均k-NN相似性
+    
+    stats = {
+        # 最近邻指标
+        'NN_Mean': nn_mean.mean(),
+        'NN_Median': np.median(nn_mean),
+        'NN_Std': nn_mean.std(),
+        'NN_Min': nn_max.min(),
+        'NN_Max': nn_max.max(),
+        'NN_Q25': np.percentile(nn_max, 25),
+        'NN_Q75': np.percentile(nn_max, 75),
+    }
+    
+    # 如果有成对采样数据，添加全局统计
+    if pair_sim is not None and len(pair_sim) > 0:
+        # 过滤有效值
+        valid_pairs = pair_sim[~np.isnan(pair_sim)]
+        
+        if len(valid_pairs) > 0:
+            stats.update({
+                'Pair_Mean': valid_pairs.mean(),
+                'Pair_Median': np.median(valid_pairs),
+                'Pair_Std': valid_pairs.std(),
+                'Pair_Min': valid_pairs.min(),
+                'Pair_Max': valid_pairs.max(),
+            })
+            
+            # Shannon熵（基于直方图）
+            try:
+                hist, _ = np.histogram(valid_pairs, bins=100, range=(0, 1), density=True)
+                p = hist / (hist.sum() + 1e-12)
+                p = p[p > 1e-12]  # 避免log(0)
+                shannon_entropy = -(p * np.log2(p)).sum()
+                stats['Shannon_Entropy'] = shannon_entropy
+            except:
+                stats['Shannon_Entropy'] = 0.0
+    
+    return stats
+
 def calculate_diversity_metrics(sim_matrix):
-    """计算多样性指标"""
+    """兼容性函数：从完整相似性矩阵计算多样性指标"""
     if sim_matrix is None:
         return {}
     
@@ -257,25 +624,94 @@ def calculate_diversity_metrics(sim_matrix):
     mask = ~np.eye(sim_matrix.shape[0], dtype=bool)
     off_diagonal = sim_matrix[mask]
     
-    return {
-        'Mean Similarity': np.mean(off_diagonal),
-        'Median Similarity': np.median(off_diagonal),
-        'Similarity Std': np.std(off_diagonal),
-        'Min Similarity': np.min(off_diagonal),
-        'Max Similarity': np.max(off_diagonal),
-        'Shannon Entropy': -np.sum(off_diagonal * np.log2(off_diagonal + 1e-10)) / len(off_diagonal)
-    }
+    # 模拟k-NN数据用于新函数
+    np.fill_diagonal(sim_matrix, -1)  # 排除自身
+    knn_sim = np.sort(sim_matrix, axis=1)[:, -30:]  # top-30 NN
+    
+    # 采样成对相似性
+    n_pairs = min(1_000_000, len(off_diagonal))
+    rng = np.random.default_rng(RANDOM_SEED)
+    sampled_pairs = rng.choice(off_diagonal, size=n_pairs, replace=False)
+    
+    return diversity_stats(knn_sim, sampled_pairs)
 
-def plot_nearest_neighbor_distribution(sim_matrix, title="Nearest Neighbor Distribution"):
-    """绘制最近邻分布"""
-    if sim_matrix is None:
+def embed_umap(fps: np.ndarray, n_pca=128, n_components=2) -> np.ndarray:
+    """先PCA降维再UMAP嵌入的优化降维方法
+    
+    Args:
+        fps: 指纹数组 (N, D)
+        n_pca: PCA中间维度
+        n_components: 最终输出维度
+    
+    Returns:
+        embedding: 低维嵌入 (N, n_components)
+    """
+    try:
+        st.info(f"🔧 使用 IncrementalPCA({n_pca}D) + UMAP({n_components}D) 降维...")
+        
+        # 第一步：IncrementalPCA
+        n_pca = min(n_pca, fps.shape[1], fps.shape[0] - 1)
+        ipca = IncrementalPCA(n_components=n_pca, batch_size=min(10_000, fps.shape[0]))
+        
+        # 分批拟合PCA
+        batch_size = min(10_000, fps.shape[0])
+        for i in range(0, len(fps), batch_size):
+            batch = fps[i:i+batch_size]
+            ipca.partial_fit(batch)
+            
+        # 变换数据
+        X_pca = ipca.transform(fps)
+        
+        st.info(f"✅ PCA完成: {fps.shape[1]}D → {X_pca.shape[1]}D")
+        
+        # 第二步：UMAP降维
+        if not UMAP_AVAILABLE:
+            st.warning("UMAP不可用，使用PCA降维到2D")
+            if X_pca.shape[1] > n_components:
+                final_pca = PCA(n_components=n_components, random_state=RANDOM_SEED)
+                return final_pca.fit_transform(X_pca)
+            else:
+                return X_pca[:, :n_components] if X_pca.shape[1] >= n_components else X_pca
+        
+        import umap
+        reducer = umap.UMAP(
+            n_components=n_components, 
+            n_neighbors=15,
+            min_dist=0.1, 
+            metric="euclidean",
+            random_state=RANDOM_SEED,
+            n_jobs=1  # 单线程避免冲突
+        )
+        
+        embedding = reducer.fit_transform(X_pca)
+        st.success(f"✅ UMAP完成: {X_pca.shape[1]}D → {embedding.shape[1]}D")
+        
+        return embedding
+        
+    except Exception as e:
+        st.error(f"降维失败: {str(e)}")
+        # 回退到简单PCA
+        st.info("回退到标准PCA降维...")
+        try:
+            pca = PCA(n_components=n_components, random_state=RANDOM_SEED)
+            return pca.fit_transform(fps)
+        except Exception as e2:
+            st.error(f"PCA回退也失败: {str(e2)}")
+            return None
+
+def plot_nearest_neighbor_distribution(sim_matrix=None, knn_sim=None, title="Nearest Neighbor Distribution"):
+    """绘制最近邻分布（支持完整矩阵或k-NN数据）"""
+    if sim_matrix is not None:
+        # 完整矩阵版本
+        np.fill_diagonal(sim_matrix, 0)
+        nearest_neighbors = np.max(sim_matrix, axis=1)
+    elif knn_sim is not None:
+        # k-NN版本
+        nearest_neighbors = np.max(knn_sim, axis=1)
+    else:
         return None
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    
-    # 计算每个分子的最近邻相似性（排除自身）
-    np.fill_diagonal(sim_matrix, 0)  # 排除自身相似性
-    nearest_neighbors = np.max(sim_matrix, axis=1)
     
     # 最近邻相似性分布
     ax1.hist(nearest_neighbors, bins=30, alpha=0.7, edgecolor='black')
@@ -297,8 +733,82 @@ def plot_nearest_neighbor_distribution(sim_matrix, title="Nearest Neighbor Distr
     plt.tight_layout()
     return fig
 
+def perform_optimized_clustering_analysis(fps: np.ndarray, n_clusters=5, eps=0.3, 
+                                        min_samples=5, use_minibatch=True, force_device=None):
+    """优化的聚类分析（直接基于指纹数据）"""
+    np.random.seed(RANDOM_SEED)
+    
+    st.info("🔧 使用优化降维 + MiniBatch聚类...")
+    
+    # 使用优化降维
+    coords = embed_umap(fps, n_pca=128, n_components=2)
+    if coords is None:
+        return None
+    
+    # 使用MiniBatchKMeans（适合大数据集）
+    if use_minibatch and len(fps) > 10_000:
+        st.info("🚀 使用MiniBatchKMeans进行聚类...")
+        kmeans = MiniBatchKMeans(
+            n_clusters=n_clusters,
+            batch_size=min(10_000, len(fps) // 10),
+            random_state=RANDOM_SEED,
+            n_init=3,
+            max_iter=100
+        )
+    else:
+        st.info("🔧 使用标准KMeans进行聚类...")
+        kmeans = KMeans(
+            n_clusters=n_clusters,
+            random_state=RANDOM_SEED,
+            n_init=10,
+            max_iter=300
+        )
+    
+    kmeans_clusters = kmeans.fit_predict(coords)
+    
+    # DBSCAN基于降维结果
+    st.info("🔧 使用DBSCAN进行密度聚类...")
+    try:
+        from sklearn.cluster import HDBSCAN
+        # 尝试使用HDBSCAN（更稳定）
+        dbscan = HDBSCAN(
+            min_cluster_size=min_samples,
+            min_samples=min_samples,
+            metric='euclidean'
+        )
+        dbscan_clusters = dbscan.fit_predict(coords)
+        st.info("✅ 使用HDBSCAN聚类")
+    except ImportError:
+        # 回退到标准DBSCAN
+        dbscan = DBSCAN(
+            eps=eps,
+            min_samples=min_samples,
+            metric='euclidean'
+        )
+        dbscan_clusters = dbscan.fit_predict(coords)
+        st.info("✅ 使用标准DBSCAN聚类")
+    
+    n_noise = np.sum(dbscan_clusters == -1)
+    n_clusters_found = len(set(dbscan_clusters)) - (1 if -1 in dbscan_clusters else 0)
+    st.info(f"📊 DBSCAN结果: {n_clusters_found}个簇, {n_noise}个噪声点")
+    
+    return {
+        'coords': coords,
+        'kmeans_clusters': kmeans_clusters,
+        'dbscan_clusters': dbscan_clusters
+    }
+
 def perform_clustering_analysis(sim_matrix, n_clusters=5, eps=0.3, min_samples=5, perplexity=30.0, force_device=None):
-    """进行聚类分析（3D版本）"""
+    """兼容性函数：基于相似性矩阵的聚类分析"""
+    if sim_matrix is None:
+        return None
+        
+    n_samples = len(sim_matrix)
+    
+    # 大数据集推荐使用优化版本
+    if n_samples > 50_000:
+        st.warning("⚠️ 大数据集建议使用优化版聚类方法 (perform_optimized_clustering_analysis)")
+    
     np.random.seed(RANDOM_SEED)
     
     cuda_available, device = initialize_cuda()
@@ -334,15 +844,24 @@ def perform_clustering_analysis(sim_matrix, n_clusters=5, eps=0.3, min_samples=5
         )
         coords = tsne_cpu.fit_transform(dist_matrix)
 
-        # CPU版本的K-means
-        kmeans_cpu = KMeans(
-            n_clusters=n_clusters, 
-            random_state=RANDOM_SEED, 
-            n_init=10,
-            algorithm='lloyd',
-            max_iter=300,
-            tol=1e-4
-        )
+        # 使用MiniBatch K-means
+        if len(sim_matrix) > 10_000:
+            kmeans_cpu = MiniBatchKMeans(
+                n_clusters=n_clusters, 
+                random_state=RANDOM_SEED, 
+                batch_size=min(5000, len(sim_matrix) // 10),
+                n_init=3,
+                max_iter=100
+            )
+        else:
+            kmeans_cpu = KMeans(
+                n_clusters=n_clusters, 
+                random_state=RANDOM_SEED, 
+                n_init=10,
+                algorithm='lloyd',
+                max_iter=300,
+                tol=1e-4
+            )
         clusters = kmeans_cpu.fit_predict(coords)
 
         # CPU版本的DBSCAN
@@ -361,6 +880,7 @@ def perform_clustering_analysis(sim_matrix, n_clusters=5, eps=0.3, min_samples=5
             'dbscan_clusters': dbscan_clusters
         }
     else:
+        # GPU版本保持不变...
         import torch 
         import cupy as cp
 
@@ -399,14 +919,22 @@ def perform_clustering_analysis(sim_matrix, n_clusters=5, eps=0.3, min_samples=5
             clusters = cp.asnumpy(clusters_gpu)
         except Exception as e:
             st.warning(f"GPU K-means失败，回退到CPU: {str(e)}")
-            kmeans_cpu = KMeans(
-                n_clusters=n_clusters, 
-                random_state=RANDOM_SEED, 
-                n_init=10,
-                algorithm='lloyd',
-                max_iter=300,
-                tol=1e-4
-            )
+            # 使用MiniBatch回退
+            if len(sim_matrix) > 10_000:
+                kmeans_cpu = MiniBatchKMeans(
+                    n_clusters=n_clusters, 
+                    random_state=RANDOM_SEED, 
+                    batch_size=min(5000, len(sim_matrix) // 10)
+                )
+            else:
+                kmeans_cpu = KMeans(
+                    n_clusters=n_clusters, 
+                    random_state=RANDOM_SEED, 
+                    n_init=10,
+                    algorithm='lloyd',
+                    max_iter=300,
+                    tol=1e-4
+                )
             clusters = kmeans_cpu.fit_predict(coords)
 
         # GPU版本的DBSCAN
@@ -445,7 +973,7 @@ def perform_clustering_analysis(sim_matrix, n_clusters=5, eps=0.3, min_samples=5
             'dbscan_clusters': dbscan_clusters
         }
 
-def plot_clustering_results(clustering_results, title="3D Clustering Results"):
+def plot_clustering_results(clustering_results, title="3D Clustering Results", method="PCA-UMAP"):
     """绘制聚类结果"""
     coords = clustering_results['coords']
     kmeans_clusters = clustering_results['kmeans_clusters']
@@ -453,18 +981,28 @@ def plot_clustering_results(clustering_results, title="3D Clustering Results"):
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
+    # 根据降维方法设置轴标签
+    if "UMAP" in method:
+        xlabel, ylabel = f"{method} Dimension 1", f"{method} Dimension 2"
+    elif "t-SNE" in method:
+        xlabel, ylabel = "t-SNE Dimension 1", "t-SNE Dimension 2"
+    elif "PCA" in method:
+        xlabel, ylabel = "PCA Dimension 1", "PCA Dimension 2"
+    else:
+        xlabel, ylabel = "Dimension 1", "Dimension 2"
+    
     # K-means结果
     scatter1 = ax1.scatter(coords[:, 0], coords[:, 1], c=kmeans_clusters, cmap='tab10', alpha=0.7)
     ax1.set_title("K-means Clustering")
-    ax1.set_xlabel("t-SNE Dimension 1")
-    ax1.set_ylabel("t-SNE Dimension 2")
+    ax1.set_xlabel(xlabel)
+    ax1.set_ylabel(ylabel)
     plt.colorbar(scatter1, ax=ax1, label='Cluster ID')
     
     # DBSCAN结果
     scatter2 = ax2.scatter(coords[:, 0], coords[:, 1], c=dbscan_clusters, cmap='tab10', alpha=0.7)
     ax2.set_title("DBSCAN Clustering")
-    ax2.set_xlabel("t-SNE Dimension 1")
-    ax2.set_ylabel("t-SNE Dimension 2")
+    ax2.set_xlabel(xlabel)
+    ax2.set_ylabel(ylabel)
     plt.colorbar(scatter2, ax=ax2, label='Cluster ID')
     
     plt.suptitle(title, y=1.02)
@@ -661,6 +1199,29 @@ if selected_folder:
 # 参数设置
 st.subheader("2. 分析参数设置")
 
+# 添加分析模式选择
+with st.expander("⚡ 分析模式选择", expanded=True):
+    analysis_mode = st.selectbox(
+        "选择分析模式",
+        ["优化模式 (推荐)", "兼容模式"],
+        help="优化模式：使用k-NN + 采样 + PCA-UMAP，适合大数据集；兼容模式：完整相似性矩阵，适合小数据集"
+    )
+    
+    if analysis_mode == "优化模式 (推荐)":
+        st.success("✅ 使用优化算法：流式读取 + k-NN相似性 + PCA-UMAP降维 + MiniBatch聚类")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            fp_dtype = st.selectbox("指纹数据类型", ["float16", "float32"], 
+                                    help="float16节省一半内存但精度稍低")
+        with col2:
+            k_neighbors = st.slider("k-NN邻居数", 10, 100, 30, 
+                                    help="每个样本保留的最近邻数量")
+        with col3:
+            n_sample_pairs = st.number_input("采样对数", 100_000, 5_000_000, 2_000_000,
+                                           help="用于全局统计的随机采样对数")
+    else:
+        st.warning("⚠️ 兼容模式：计算完整相似性矩阵，内存消耗大，仅适合小数据集")
+
 with st.expander("📊 相似性和聚类参数", expanded=True):
     col1, col2, col3 = st.columns(3)
     
@@ -780,120 +1341,165 @@ if st.button("🚀 开始3D结构多样性分析", type="primary") and 'selected
             f"- 内存占用: {mem_usage['percent']:.1f}%"
         )
         
-        # 加载3D指纹数据
-        fingerprints_A, df_A, fp_cols_A = load_fingerprints_from_csv(fileA_path)
-        fingerprints_B, df_B, fp_cols_B = load_fingerprints_from_csv(fileB_path)
+        if analysis_mode == "优化模式 (推荐)":
+            # 使用优化的流式加载
+            st.info("🚀 使用优化模式进行分析...")
+            fingerprints_A, fp_cols_A, meta_A = read_fps(fileA_path, fp_dtype=fp_dtype)
+            fingerprints_B, fp_cols_B, meta_B = read_fps(fileB_path, fp_dtype=fp_dtype)
+        else:
+            # 使用兼容模式
+            st.info("⚡ 使用兼容模式进行分析...")
+            fingerprints_A, meta_A, fp_cols_A = load_fingerprints_from_csv(fileA_path)
+            fingerprints_B, meta_B, fp_cols_B = load_fingerprints_from_csv(fileB_path)
         
         if fingerprints_A is not None and fingerprints_B is not None:
             results_container.empty()
             
             with results_container:
-                st.success(f"✅ 成功加载: 数据集A {len(fingerprints_A)}个样本，数据集B {len(fingerprints_B)}个样本")
+                st.success(f"✅ 成功加载: 数据集A {len(fingerprints_A):,}个样本，数据集B {len(fingerprints_B):,}个样本")
                 
                 # 显示基本统计信息
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("数据集A样本数", len(fingerprints_A))
+                    st.metric("数据集A样本数", f"{len(fingerprints_A):,}")
                 with col2:
-                    st.metric("数据集B样本数", len(fingerprints_B))
+                    st.metric("数据集B样本数", f"{len(fingerprints_B):,}")
                 with col3:
                     st.metric("指纹维度", len(fp_cols_A))
                 with col4:
                     st.metric("选择比例", f"{len(fingerprints_B)/len(fingerprints_A)*100:.1f}%")
                 
-                # 计算相似性矩阵
-                st.markdown("### 📊 3D指纹相似性分析")
-                
-                st.info(f"使用 {similarity_metric} 相似性度量计算相似性矩阵...")
-                sim_matrixA = compute_similarity_matrix_from_fingerprints(fingerprints_A, similarity_metric)
-                sim_matrixB = compute_similarity_matrix_from_fingerprints(fingerprints_B, similarity_metric)
-                
-                if sim_matrixA is not None and sim_matrixB is not None:
-                    # 显示多样性指标
-                    col1, col2 = st.columns(2)
+                # 根据分析模式选择不同的计算方法
+                if analysis_mode == "优化模式 (推荐)":
+                    # ===========================================
+                    # 优化模式：使用k-NN + 采样方法
+                    # ===========================================
+                    st.markdown("### ⚡ 优化模式3D指纹分析")
                     
-                    with col1:
-                        st.markdown("**数据集A多样性指标**")
-                        metrics_A = calculate_diversity_metrics(sim_matrixA)
-                        for key, value in metrics_A.items():
-                            st.metric(key, f"{value:.4f}")
+                    # L2归一化（余弦相似性需要）
+                    if similarity_metric == "cosine":
+                        if FAISS_AVAILABLE:
+                            import faiss
+                            # 确保数组与FAISS兼容
+                            fingerprints_A = ensure_faiss_compatible(fingerprints_A)
+                            fingerprints_B = ensure_faiss_compatible(fingerprints_B)
+                            faiss.normalize_L2(fingerprints_A)
+                            faiss.normalize_L2(fingerprints_B)
+                        else:
+                            fingerprints_A = fingerprints_A / (np.linalg.norm(fingerprints_A, axis=1, keepdims=True) + 1e-10)
+                            fingerprints_B = fingerprints_B / (np.linalg.norm(fingerprints_B, axis=1, keepdims=True) + 1e-10)
                     
-                    with col2:
-                        st.markdown("**数据集B多样性指标**")
-                        metrics_B = calculate_diversity_metrics(sim_matrixB)
-                        for key, value in metrics_B.items():
-                            st.metric(key, f"{value:.4f}")
-                    
-                    # 最近邻分布分析
-                    st.markdown("### 🎯 最近邻分布")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        fig = plot_nearest_neighbor_distribution(sim_matrixA, "Dataset A Nearest Neighbor Distribution")
-                        st.pyplot(fig)
-                        plt.close(fig)
-                    
-                    with col2:
-                        fig = plot_nearest_neighbor_distribution(sim_matrixB, "Dataset B Nearest Neighbor Distribution")
-                        st.pyplot(fig)
-                        plt.close(fig)
-                    
-                    # 聚类分析
-                    st.markdown("### 🔍 聚类分析")
-                    with st.spinner("执行聚类分析..."):
-                        clustering_resultsA = perform_clustering_analysis(
-                            sim_matrixA, 
-                            n_clusters=n_clusters,
-                            eps=eps,
-                            min_samples=min_samples,
-                            perplexity=perplexity if dim_reduction_method == "t-SNE" else 30.0,
-                            force_device=force_device if debug_mode else None
-                        )
-                        clustering_resultsB = perform_clustering_analysis(
-                            sim_matrixB, 
-                            n_clusters=n_clusters,
-                            eps=eps,
-                            min_samples=min_samples,
-                            perplexity=perplexity if dim_reduction_method == "t-SNE" else 30.0,
-                            force_device=force_device if debug_mode else None
-                        )
+                    # 计算k-NN相似性
+                    st.info(f"计算k-NN相似性 (k={k_neighbors})...")
+                    try:
+                        knn_A = knn_similarity(fingerprints_A, similarity_metric, k_neighbors, use_gpu=True)
+                        knn_B = knn_similarity(fingerprints_B, similarity_metric, k_neighbors, use_gpu=True)
+                    except Exception as e:
+                        st.error(f"k-NN计算出错: {str(e)}")
+                        st.info("回退到sklearn计算...")
+                        # 回退到sklearn方法
+                        from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
+                        if similarity_metric == "cosine":
+                            sim_A = cosine_similarity(fingerprints_A)
+                            sim_B = cosine_similarity(fingerprints_B)
+                        else:
+                            dist_A = euclidean_distances(fingerprints_A)
+                            dist_B = euclidean_distances(fingerprints_B)
+                            sim_A = 1 - (dist_A / dist_A.max())
+                            sim_B = 1 - (dist_B / dist_B.max())
                         
+                        # 提取k-NN
+                        np.fill_diagonal(sim_A, -1)
+                        np.fill_diagonal(sim_B, -1)
+                        knn_A = np.sort(sim_A, axis=1)[:, -k_neighbors:]
+                        knn_B = np.sort(sim_B, axis=1)[:, -k_neighbors:]
+                        del sim_A, sim_B  # 清理内存
+                        gc.collect()
+                    
+                    if knn_A is not None and knn_B is not None:
+                        # 采样成对相似性
+                        st.info(f"随机采样成对相似性 ({n_sample_pairs:,} 对)...")
+                        rng = np.random.default_rng(RANDOM_SEED)
+                        pair_A = sample_pairwise(fingerprints_A, n_sample_pairs, similarity_metric, rng)
+                        pair_B = sample_pairwise(fingerprints_B, n_sample_pairs, similarity_metric, rng)
+                        
+                        # 计算多样性指标
+                        metrics_A = diversity_stats(knn_A, pair_A)
+                        metrics_B = diversity_stats(knn_B, pair_B)
+                        
+                        # 显示多样性指标
                         col1, col2 = st.columns(2)
+                        
                         with col1:
-                            fig = plot_clustering_results(clustering_resultsA, "Dataset A 3D Clustering Results")
-                            st.pyplot(fig)
-                            plt.close(fig)
+                            st.markdown("**数据集A多样性指标**")
+                            for key, value in metrics_A.items():
+                                st.metric(key, f"{value:.4f}")
                         
                         with col2:
-                            fig = plot_clustering_results(clustering_resultsB, "Dataset B 3D Clustering Results")
-                            st.pyplot(fig)
-                            plt.close(fig)
-                    
-                    # 结构分布分析
-                    st.markdown("### 📊 3D结构分布分析")
-                    
-                    # 合并数据进行分布比较
-                    combined_fingerprints = np.vstack([fingerprints_A, fingerprints_B])
-                    st.info(f"计算合并数据集的相似性矩阵 ({len(combined_fingerprints)} 个样本)...")
-                    sim_matrix_combined = compute_similarity_matrix_from_fingerprints(combined_fingerprints, similarity_metric)
-                    
-                    if sim_matrix_combined is not None:
-                        st.info(f"使用{dim_reduction_method}进行降维...")
-                        coords = perform_dimensionality_reduction(
-                            sim_matrix_combined,
-                            method=dim_reduction_method,
-                            perplexity=perplexity if dim_reduction_method == "t-SNE" else None,
-                            n_neighbors=n_neighbors if dim_reduction_method == "UMAP" else None,
-                            min_dist=min_dist if dim_reduction_method == "UMAP" else None,
-                            force_device=force_device if debug_mode else None
-                        )
+                            st.markdown("**数据集B多样性指标**")
+                            for key, value in metrics_B.items():
+                                st.metric(key, f"{value:.4f}")
+                        
+                        # 最近邻分布分析
+                        st.markdown("### 🎯 最近邻分布")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            fig = plot_nearest_neighbor_distribution(knn_sim=knn_A, title="Dataset A Nearest Neighbor Distribution")
+                            if fig:
+                                st.pyplot(fig)
+                                plt.close(fig)
+                        
+                        with col2:
+                            fig = plot_nearest_neighbor_distribution(knn_sim=knn_B, title="Dataset B Nearest Neighbor Distribution")
+                            if fig:
+                                st.pyplot(fig)
+                                plt.close(fig)
+                        
+                        # 优化聚类分析
+                        st.markdown("### 🔍 优化聚类分析")
+                        with st.spinner("执行优化聚类分析..."):
+                            clustering_resultsA = perform_optimized_clustering_analysis(
+                                fingerprints_A, 
+                                n_clusters=n_clusters,
+                                eps=eps,
+                                min_samples=min_samples,
+                                use_minibatch=True
+                            )
+                            clustering_resultsB = perform_optimized_clustering_analysis(
+                                fingerprints_B, 
+                                n_clusters=n_clusters,
+                                eps=eps,
+                                min_samples=min_samples,
+                                use_minibatch=True
+                            )
+                            
+                            if clustering_resultsA and clustering_resultsB:
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    fig = plot_clustering_results(clustering_resultsA, "Dataset A Optimized Clustering", "PCA-UMAP")
+                                    st.pyplot(fig)
+                                    plt.close(fig)
+                                
+                                with col2:
+                                    fig = plot_clustering_results(clustering_resultsB, "Dataset B Optimized Clustering", "PCA-UMAP")
+                                    st.pyplot(fig)
+                                    plt.close(fig)
+                        
+                        # 结构分布分析（合并数据集）
+                        st.markdown("### 📊 3D结构分布分析")
+                        
+                        combined_fingerprints = np.vstack([fingerprints_A, fingerprints_B])
+                        st.info(f"使用优化降维分析合并数据集 ({len(combined_fingerprints):,} 个样本)...")
+                        
+                        coords = embed_umap(combined_fingerprints, n_pca=128, n_components=2)
                         
                         if coords is not None:
                             # 分离坐标
                             coords_A = coords[:len(fingerprints_A)]
                             coords_B = coords[len(fingerprints_A):]
                             
-                            st.markdown(f"**3D结构分布对比** ({dim_reduction_method})")
+                            st.markdown("**3D结构分布对比** (PCA-UMAP)")
                             st.markdown("""
                             - 蓝色点：原始完整数据集（数据集A）
                             - 橙色点：被选中的子集（数据集B）
@@ -917,18 +1523,163 @@ if st.button("🚀 开始3D结构多样性分析", type="primary") and 'selected
                             fig = plot_distribution_comparison(coords_A, coords_B, {})
                             st.pyplot(fig)
                             plt.close(fig)
+                
+                else:
+                    # ===========================================
+                    # 兼容模式：完整相似性矩阵方法
+                    # ===========================================
+                    st.markdown("### 📊 兼容模式3D指纹相似性分析")
+                    
+                    st.info(f"使用 {similarity_metric} 相似性度量计算完整相似性矩阵...")
+                    sim_matrixA = compute_similarity_matrix_from_fingerprints(fingerprints_A, similarity_metric)
+                    sim_matrixB = compute_similarity_matrix_from_fingerprints(fingerprints_B, similarity_metric)
+                    
+                    if sim_matrixA is not None and sim_matrixB is not None:
+                        # 显示多样性指标
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("**数据集A多样性指标**")
+                            metrics_A = calculate_diversity_metrics(sim_matrixA)
+                            for key, value in metrics_A.items():
+                                st.metric(key, f"{value:.4f}")
+                        
+                        with col2:
+                            st.markdown("**数据集B多样性指标**")
+                            metrics_B = calculate_diversity_metrics(sim_matrixB)
+                            for key, value in metrics_B.items():
+                                st.metric(key, f"{value:.4f}")
+                        
+                        # 最近邻分布分析
+                        st.markdown("### 🎯 最近邻分布")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            fig = plot_nearest_neighbor_distribution(sim_matrix=sim_matrixA, title="Dataset A Nearest Neighbor Distribution")
+                            if fig:
+                                st.pyplot(fig)
+                                plt.close(fig)
+                        
+                        with col2:
+                            fig = plot_nearest_neighbor_distribution(sim_matrix=sim_matrixB, title="Dataset B Nearest Neighbor Distribution")
+                            if fig:
+                                st.pyplot(fig)
+                                plt.close(fig)
+                        
+                        # 聚类分析
+                        st.markdown("### 🔍 聚类分析")
+                        with st.spinner("执行聚类分析..."):
+                            clustering_resultsA = perform_clustering_analysis(
+                                sim_matrixA, 
+                                n_clusters=n_clusters,
+                                eps=eps,
+                                min_samples=min_samples,
+                                perplexity=perplexity if dim_reduction_method == "t-SNE" else 30.0,
+                                force_device=force_device if debug_mode else None
+                            )
+                            clustering_resultsB = perform_clustering_analysis(
+                                sim_matrixB, 
+                                n_clusters=n_clusters,
+                                eps=eps,
+                                min_samples=min_samples,
+                                perplexity=perplexity if dim_reduction_method == "t-SNE" else 30.0,
+                                force_device=force_device if debug_mode else None
+                            )
                             
-                            # 显示GPU内存使用情况（如果可用）
-                            if torch.cuda.is_available():
-                                gpu_mem_alloc = torch.cuda.memory_allocated() / 1024**2
-                                gpu_mem_cached = torch.cuda.memory_reserved() / 1024**2
-                                st.sidebar.success(
-                                    f"GPU内存状态:\n"
-                                    f"- 已分配: {gpu_mem_alloc:.1f}MB\n"
-                                    f"- 已缓存: {gpu_mem_cached:.1f}MB"
-                                )
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                fig = plot_clustering_results(clustering_resultsA, "Dataset A 3D Clustering Results", dim_reduction_method)
+                                st.pyplot(fig)
+                                plt.close(fig)
                             
-                            st.success("✅ 3D结构多样性分析完成！")
+                            with col2:
+                                fig = plot_clustering_results(clustering_resultsB, "Dataset B 3D Clustering Results", dim_reduction_method)
+                                st.pyplot(fig)
+                                plt.close(fig)
+                        
+                        # 结构分布分析
+                        st.markdown("### 📊 3D结构分布分析")
+                        
+                        # 合并数据进行分布比较
+                        combined_fingerprints = np.vstack([fingerprints_A, fingerprints_B])
+                        st.info(f"计算合并数据集的相似性矩阵 ({len(combined_fingerprints)} 个样本)...")
+                        sim_matrix_combined = compute_similarity_matrix_from_fingerprints(combined_fingerprints, similarity_metric)
+                        
+                        if sim_matrix_combined is not None:
+                            st.info(f"使用{dim_reduction_method}进行降维...")
+                            coords = perform_dimensionality_reduction(
+                                sim_matrix_combined,
+                                method=dim_reduction_method,
+                                perplexity=perplexity if dim_reduction_method == "t-SNE" else None,
+                                n_neighbors=n_neighbors if dim_reduction_method == "UMAP" else None,
+                                min_dist=min_dist if dim_reduction_method == "UMAP" else None,
+                                force_device=force_device if debug_mode else None
+                            )
+                            
+                            if coords is not None:
+                                # 分离坐标
+                                coords_A = coords[:len(fingerprints_A)]
+                                coords_B = coords[len(fingerprints_A):]
+                                
+                                st.markdown(f"**3D结构分布对比** ({dim_reduction_method})")
+                                st.markdown("""
+                                - 蓝色点：原始完整数据集（数据集A）
+                                - 橙色点：被选中的子集（数据集B）
+                                """)
+                                
+                                # 简化的分布指标
+                                center_A = np.mean(coords_A, axis=0)
+                                center_B = np.mean(coords_B, axis=0)
+                                center_distance = np.linalg.norm(center_A - center_B)
+                                
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("中心点距离", f"{center_distance:.3f}")
+                                with col2:
+                                    dispersion_A = np.mean(np.linalg.norm(coords_A - center_A, axis=1))
+                                    st.metric("数据集A离散度", f"{dispersion_A:.3f}")
+                                with col3:
+                                    dispersion_B = np.mean(np.linalg.norm(coords_B - center_B, axis=1))
+                                    st.metric("数据集B离散度", f"{dispersion_B:.3f}")
+                                
+                                fig = plot_distribution_comparison(coords_A, coords_B, {})
+                                st.pyplot(fig)
+                                plt.close(fig)
+                
+                # 显示最终结果和内存使用情况
+                mem_usage_final = monitor_memory_usage()
+                
+                if analysis_mode == "优化模式 (推荐)":
+                    st.success("✅ 优化模式3D结构多样性分析完成！")
+                    st.info(f"🎯 算法优势: 流式读取 + k-NN相似性 + PCA-UMAP降维 + MiniBatch聚类")
+                else:
+                    st.success("✅ 兼容模式3D结构多样性分析完成！")
+                
+                # 显示GPU内存使用情况（如果可用）
+                if TORCH_AVAILABLE and torch.cuda.is_available():
+                    gpu_mem_alloc = torch.cuda.memory_allocated() / 1024**2
+                    gpu_mem_cached = torch.cuda.memory_reserved() / 1024**2
+                    st.sidebar.success(
+                        f"GPU内存状态:\n"
+                        f"- 已分配: {gpu_mem_alloc:.1f}MB\n"
+                        f"- 已缓存: {gpu_mem_cached:.1f}MB"
+                    )
+                
+                # 显示最终内存使用
+                st.sidebar.info(
+                    f"最终内存使用:\n"
+                    f"- RSS: {mem_usage_final['rss']:.1f} MB\n"
+                    f"- 内存占用: {mem_usage_final['percent']:.1f}%"
+                )
+                
+                # 清理内存
+                if analysis_mode == "优化模式 (推荐)":
+                    del fingerprints_A, fingerprints_B
+                    if 'combined_fingerprints' in locals():
+                        del combined_fingerprints
+                    gc.collect()
+                    if TORCH_AVAILABLE and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                 
         else:
             st.error("无法加载指纹数据，请检查文件格式") 

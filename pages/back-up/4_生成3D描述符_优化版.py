@@ -1,7 +1,6 @@
 """
-CADD-Toolbox - 3D分子描述符生成页面 (优化版 + 中断继续)
+CADD-Toolbox - 3D分子描述符生成页面 (优化版)
 采用流式计算、减少内存占用、利用Mordred内置并行的高效版本
-支持断点恢复功能，可在意外中断后继续计算
 """
 
 import os
@@ -13,8 +12,6 @@ import pathlib
 import multiprocessing as mp
 from datetime import datetime
 import itertools
-import json
-from itertools import islice
 
 import numpy as np
 import pandas as pd
@@ -32,12 +29,12 @@ try:
 except ImportError:
     MORDRED_AVAILABLE = False
 
-st.set_page_config(page_title="生成3D描述符 (优化版+中断继续)", layout="wide")
-st.title("🚀 生成3D分子描述符 - 高性能流式版 + 中断继续")
+st.set_page_config(page_title="生成3D描述符 (优化版)", layout="wide")
+st.title("🚀 生成3D分子描述符 - 高性能流式版")
 # 优化版使用说明（移到页面上方，默认折叠）
 with st.expander("📖 优化版使用说明", expanded=False):
     st.markdown("""
-    ### 🚀 高性能优化特性 + 中断继续
+    ### 🚀 高性能优化特性
     
     #### 核心优化
     - **流式处理**: 边读边算边写，避免一次性加载大文件到内存
@@ -46,23 +43,6 @@ with st.expander("📖 优化版使用说明", expanded=False):
     - **减少分子拷贝**: 避免不必要的深拷贝，节省60-70%内存
     - **压缩文件支持**: 直接处理.sdf.gz文件，节省存储空间
     - **脚本生成执行**: 计算逻辑完全脱离Streamlit，生成独立可执行脚本
-    - **断点恢复**: 支持意外中断后自动继续计算，避免从头开始
-    
-    #### 🔄 断点恢复机制
-    
-    **双层恢复策略**:
-    - **块级恢复**: 启用文件分割时，记录已完成的块，重启时跳过
-    - **行级恢复**: 单文件模式下，记录已处理的分子数，继续写入
-    
-    **Checkpoint文件**: `.ckpt.json`
-    - 自动保存处理进度和配置信息
-    - 完成后自动清理，无需手动管理
-    - 支持配置变更检测和兼容性验证
-    
-    **使用方式**:
-    - 无需任何额外操作，重新执行相同脚本即可自动恢复
-    - 支持跨会话恢复，关机重启后仍可继续
-    - 智能跳过已处理部分，直接从中断点继续
     
     #### 性能提升
     - **内存占用**: < 500MB (vs 原版可能数GB)
@@ -164,22 +144,18 @@ with st.expander("📖 优化版使用说明", expanded=False):
     - **依赖缺失**: 检查RDKit和Mordred是否正确安装
     - **计算错误**: 查看stderr日志文件获取详细错误信息
     - **进程僵死**: 使用`ps`和`kill`命令管理进程
-    - **恢复异常**: 删除`.ckpt.json`文件强制重新开始
-    - **配置冲突**: 检查checkpoint中的配置与当前设置是否一致
     
     #### 优势对比
     
-    | 特性 | 原版 | 优化版 | 优化版+中断继续 |
-    |------|------|--------|----------------|
-    | 执行环境 | Streamlit内部 | 独立后台进程 | 独立后台进程 |
-    | 内存占用 | 数GB | < 500MB | < 500MB |
-    | 页面依赖 | 必须保持打开 | 可以关闭 | 可以关闭 |
-    | 错误恢复 | 重新开始 | 重新开始 | 自动断点恢复 |
-    | 中断处理 | 数据丢失 | 数据丢失 | 智能恢复 |
-    | 日志记录 | 界面显示 | 文件持久化 | 文件持久化 |
-    | 并发任务 | 单任务 | 多任务并行 | 多任务并行 |
-    | 性能监控 | 基础 | 详细监控 | 详细监控 |
-    | 长时间任务 | 不稳定 | 较稳定 | 高度稳定 |
+    | 特性 | 原版 | 优化版 |
+    |------|------|--------|
+    | 执行环境 | Streamlit内部 | 独立后台进程 |
+    | 内存占用 | 数GB | < 500MB |
+    | 页面依赖 | 必须保持打开 | 可以关闭 |
+    | 错误恢复 | 重新开始 | 断点恢复 |
+    | 日志记录 | 界面显示 | 文件持久化 |
+    | 并发任务 | 单任务 | 多任务并行 |
+    | 性能监控 | 基础 | 详细监控 |
     """)
 
 # 数据目录设置
@@ -668,8 +644,7 @@ def generate_descriptor_script(config, input_file, output_file, script_path):
     
     script_content = f'''#!/usr/bin/env python3
 """
-独立的3D分子描述符计算脚本 (高性能优化版 + 中断继续)
-支持断点恢复功能，可在意外中断后继续计算
+独立的3D分子描述符计算脚本 (高性能优化版)
 自动生成于 {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 """
 
@@ -681,8 +656,6 @@ import gzip
 import tempfile
 import multiprocessing as mp
 from datetime import datetime
-import json
-from itertools import islice
 
 import numpy as np
 import pandas as pd
@@ -771,15 +744,9 @@ def split_large_sdf(input_file, chunk_size=50000, output_dir=None):
     
     return chunk_files
 
-def stream_compute_descriptors(input_file, output_file, config, checkpoint_state=None):
+def stream_compute_descriptors(input_file, output_file, config):
     """
-    流式计算描述符 - 核心优化函数 (支持断点恢复)
-    
-    Args:
-        input_file: 输入SDF文件路径
-        output_file: 输出CSV文件路径
-        config: 配置参数
-        checkpoint_state: 恢复状态信息 (若为None则从头开始)
+    流式计算描述符 - 核心优化函数
     """
     try:
         start_time = time.time()
@@ -791,19 +758,10 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
         include_smiles = config['include_smiles']
         nproc = config['num_workers']
         
-        # 恢复参数
-        resume_mode = checkpoint_state is not None
-        start_skip = checkpoint_state.get('processed_molecules', 0) if resume_mode else 0
-        
-        if resume_mode:
-            print("🔄 检测到断点恢复模式...")
-            print(f"将跳过前 {{start_skip:,}} 个分子继续处理")
-        
         print("开始计算描述符...")
         print(f"输入文件: {{input_file}}")
         print(f"输出文件: {{output_file}}")
         print(f"配置: 进程数={{nproc}}, 3D={{include_3d}}, 聚合={{aggregation_method}}")
-        print(f"断点恢复: {{resume_mode}}, 跳过分子数: {{start_skip:,}}")
         
         # 创建Mordred计算器
         calc = Calculator(descriptors, ignore_3D=not include_3d)
@@ -844,21 +802,14 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
         # 创建分子供应器（关键优化：sanitize=False）
         supplier = create_mol_supplier(input_file, sanitize=False, removeHs=False)
         
-        # 准备分子迭代器 (支持断点恢复)
-        def mol_iterator(start_skip=0):
-            """惰性分子迭代器 (支持跳过指定数量的分子)"""
+        # 准备分子迭代器
+        def mol_iterator():
+            """惰性分子迭代器"""
             count = 0
             mol_id_counter = 0
-            skipped = 0
             
             for mol in supplier:
                 if mol is None:
-                    continue
-                
-                # 断点恢复: 跳过已处理的分子
-                if skipped < start_skip:
-                    skipped += 1
-                    mol_id_counter += 1
                     continue
                 
                 # 处理数量限制
@@ -882,7 +833,6 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                 try:
                     Chem.SanitizeMol(mol)
                 except:
-                    mol_id_counter += 1
                     continue  # 跳过无法sanitize的分子
                 
                 # 确保有3D坐标（如果需要3D描述符）
@@ -890,7 +840,6 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                     try:
                         AllChem.EmbedMolecule(mol, randomSeed=42)
                     except:
-                        mol_id_counter += 1
                         continue  # 跳过无法生成3D坐标的分子
                 
                 yield mol, mol_id, mol_props
@@ -900,29 +849,21 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                 # 进度报告
                 if count % 100 == 0:
                     elapsed = time.time() - start_time
-                    actual_processed = start_skip + count
                     rate = count / elapsed if elapsed > 0 else 0
-                    print(f"已处理 {{actual_processed:,}} 个分子 (本次: {{count:,}}, {{rate:.1f}} mol/sec)")
+                    print(f"已处理 {{count:,}} 个分子 ({{rate:.1f}} mol/sec)")
         
-        # 流式写入CSV (支持断点恢复)
+        # 流式写入CSV
         processed_count = 0
-        append_mode = resume_mode and os.path.exists(output_file)
         
-        file_mode = 'a' if append_mode else 'w'
-        with open(output_file, file_mode, newline='', encoding='utf-8') as csvfile:
+        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
-            
-            # 只有在非append模式下才写入表头
-            if not append_mode:
-                writer.writerow(header)
-            else:
-                print(f"📝 以追加模式写入CSV文件: {{output_file}}")
+            writer.writerow(header)
             
             # 处理聚合策略
             if aggregation_method == "first" or aggregation_method == "none":
                 # 不聚合，每个构象写一行
                 def mol_desc_iterator():
-                    for mol, mol_id, mol_props in mol_iterator(start_skip):
+                    for mol, mol_id, mol_props in mol_iterator():
                         if mol.GetNumConformers() == 0:
                             # 没有构象，直接计算
                             yield mol, mol_id, mol_props
@@ -1009,7 +950,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                 temp_conf_indices = []
                 temp_mol_props_list = []
                 
-                for mol, mol_id, mol_props in mol_iterator(start_skip):
+                for mol, mol_id, mol_props in mol_iterator():
                     if mol_id not in molecule_data:
                         molecule_data[mol_id] = {{
                             'smiles': Chem.MolToSmiles(mol) if include_smiles else '',
@@ -1083,7 +1024,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                     # 过滤掉空的conformer_values元素
                     valid_conformer_values = [cv for cv in conformer_values if cv and len(cv) > 0]
                     if not valid_conformer_values:
-                        print(f"警告: 分子 {{mol_id}} 的所有构象描述符计算都失败，跳过")
+                        print(f"警告: 分子 {mol_id} 的所有构象描述符计算都失败，跳过")
                         continue
                     
                     # 进行聚合
@@ -1092,7 +1033,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                         
                         # 检查数组是否有效
                         if values_array.size == 0:
-                            print(f"警告: 分子 {{mol_id}} 的描述符数组为空，跳过")
+                            print(f"警告: 分子 {mol_id} 的描述符数组为空，跳过")
                             continue
                         
                         if aggregation_method == "mean":
@@ -1108,7 +1049,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                         else:
                             aggregated = values_array[0]  # 默认取第一个
                     except Exception as e:
-                        print(f"警告: 分子 {{mol_id}} 聚合计算失败: {{e}}，跳过")
+                        print(f"警告: 分子 {mol_id} 聚合计算失败: {e}，跳过")
                         continue
                     
                     # 构建行数据
@@ -1177,7 +1118,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
         return False, 0, 0, error_msg
 
 def main():
-    """主函数 (支持断点恢复)"""
+    """主函数"""
     # 配置参数
     config = {{
         'include_3d': {config['include_3d']},
@@ -1193,40 +1134,9 @@ def main():
     output_file = r'{os.path.abspath(output_file)}'
     
     print("=" * 60)
-    print("3D分子描述符计算 - 高性能优化版 + 中断继续")
+    print("3D分子描述符计算 - 高性能优化版")
     print("=" * 60)
     print(f"启动时间: {{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}}")
-    
-    # checkpoint文件路径
-    checkpoint_path = output_file + '.ckpt.json'
-    
-    # 加载checkpoint (如果存在)
-    state = {{}}
-    if os.path.exists(checkpoint_path):
-        try:
-            with open(checkpoint_path, 'r', encoding='utf-8') as f:
-                state = json.load(f)
-            print(f"🔄 发现checkpoint文件: {{checkpoint_path}}")
-            print(f"📊 恢复模式: {{state.get('mode', 'unknown')}}")
-            
-            # 验证配置兼容性 (简单检查)
-            saved_config = state.get('config', {{}})
-            critical_params = ['enable_chunking', 'chunk_size', 'aggregation_method']
-            for param in critical_params:
-                if saved_config.get(param) != config.get(param):
-                    print(f"⚠️  警告: 参数 {{param}} 发生变化 ({{saved_config.get(param)}} -> {{config.get(param)}})")
-                    
-        except Exception as e:
-            print(f"⚠️  读取checkpoint失败: {{e}}, 将重新开始")
-            state = {{}}
-    else:
-        state = {{
-            "mode": "chunks" if config['enable_chunking'] else "single",
-            "finished_chunks": [],
-            "processed_molecules": 0,
-            "config": config
-        }}
-        print("🆕 首次运行，从头开始")
     
     # 记录主程序开始时间
     main_start_time = time.time()
@@ -1246,44 +1156,16 @@ def main():
     if config['enable_chunking']:
         print(f"启用文件分割: 每块 {{config['chunk_size']:,}} 个分子")
         
-        # 获取已完成的块
-        finished_chunks = set(state.get("finished_chunks", []))
-        if finished_chunks:
-            print(f"🔄 已完成的块: {{', '.join(sorted(finished_chunks))}}")
-        
         # 分割文件
         chunk_files = split_large_sdf(input_file, config['chunk_size'])
         print(f"文件已分割为 {{len(chunk_files)}} 个块")
         
-        # 处理每个块 (跳过已完成的)
+        # 处理每个块
         all_results = []
         total_processed = 0
         
         for i, chunk_file in enumerate(chunk_files, 1):
-            chunk_name = os.path.basename(chunk_file)
-            
-            # 检查是否已经完成
-            if chunk_name in finished_chunks:
-                print(f"\\n⏭️  跳过已完成块 {{i}}/{{len(chunk_files)}}: {{chunk_name}}")
-                chunk_output = output_file.replace('.csv', f'_chunk_{{i:03d}}.csv')
-                if os.path.exists(chunk_output):
-                    all_results.append(chunk_output)
-                    # 尝试计算已完成块的分子数
-                    try:
-                        with open(chunk_output, 'r', encoding='utf-8') as f:
-                            count = sum(1 for _ in f) - 1  # 减去表头
-                        total_processed += count
-                        print(f"  已完成块包含 {{count:,}} 个分子")
-                    except:
-                        pass
-                # 清理临时分割文件
-                try:
-                    os.unlink(chunk_file)
-                except:
-                    pass
-                continue
-            
-            print(f"\\n🔄 处理块 {{i}}/{{len(chunk_files)}}: {{chunk_name}}")
+            print(f"\\n处理块 {{i}}/{{len(chunk_files)}}: {{os.path.basename(chunk_file)}}")
             
             chunk_output = output_file.replace('.csv', f'_chunk_{{i:03d}}.csv')
             success, count, elapsed, error = stream_compute_descriptors(chunk_file, chunk_output, config)
@@ -1291,14 +1173,7 @@ def main():
             if success:
                 total_processed += count
                 all_results.append(chunk_output)
-                print(f"✅ 块 {{i}} 完成: {{count:,}} 个分子")
-                
-                # 更新checkpoint
-                finished_chunks.add(chunk_name)
-                state["finished_chunks"] = list(finished_chunks)
-                with open(checkpoint_path, 'w', encoding='utf-8') as f:
-                    json.dump(state, f, ensure_ascii=False, indent=2)
-                print(f"💾 已保存进度到checkpoint")
+                print(f"块 {{i}} 完成: {{count:,}} 个分子")
                 
                 # 清理临时分割文件
                 try:
@@ -1306,7 +1181,7 @@ def main():
                 except:
                     pass
             else:
-                print(f"❌ 块 {{i}} 处理失败: {{error}}")
+                print(f"块 {{i}} 处理失败: {{error}}")
                 success, count, elapsed = False, 0, time.time() - main_start_time
                 error_msg = f"文件分割处理失败在块 {{i}}: {{error}}"
                 break
@@ -1339,38 +1214,13 @@ def main():
                 error_msg = "文件分割处理失败"
         
     else:
-        # 直接处理整个文件 (支持行级恢复)
-        checkpoint_state = None
-        
-        # 检查是否需要恢复
-        if os.path.exists(output_file) and state.get("processed_molecules", 0) > 0:
-            processed_lines = state.get("processed_molecules", 0)
-            print(f"🔄 检测到已处理 {{processed_lines:,}} 个分子，将继续处理")
-            checkpoint_state = {{'processed_molecules': processed_lines}}
-        
-        success, count, elapsed, error = stream_compute_descriptors(input_file, output_file, config, checkpoint_state)
-        
-        # 更新checkpoint (每处理一定数量后)
-        if success:
-            total_processed = state.get("processed_molecules", 0) + count
-            state["processed_molecules"] = total_processed
-            with open(checkpoint_path, 'w', encoding='utf-8') as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-            print(f"💾 已保存进度到checkpoint: {{total_processed:,}} 个分子")
+        # 直接处理整个文件
+        success, count, elapsed, error = stream_compute_descriptors(input_file, output_file, config)
     
     if success:
         print("\\n" + "=" * 60)
         print("计算成功完成!")
         print("=" * 60)
-        
-        # 清理checkpoint文件
-        try:
-            if os.path.exists(checkpoint_path):
-                os.unlink(checkpoint_path)
-                print(f"🗑️  已清理checkpoint文件: {{checkpoint_path}}")
-        except Exception as e:
-            print(f"⚠️  清理checkpoint文件失败: {{e}}")
-        
         sys.exit(0)
     else:
         print("\\n" + "=" * 60)
@@ -1475,15 +1325,13 @@ exit $EXIT_CODE
 
 # 界面部分
 st.markdown("""
-🚀 **高性能版本特性 + 中断继续**:
+🚀 **高性能版本特性**:
 - 🌊 **流式处理**: 边读边算边写，内存占用 < 500MB
 - ⚡ **Mordred内置并行**: 充分利用CPU多核心
 - 📈 **百万级支持**: 线性扩展，2-3小时处理百万分子
 - 💾 **智能内存管理**: 避免分子深拷贝，减少70%内存使用
 - 🗜️ **压缩文件支持**: 直接读取.sdf.gz文件
 - 🔄 **延迟sanitize**: 只对需要的分子进行检查，提升2-4倍速度
-- 💿 **断点恢复**: 支持意外中断后自动继续计算，避免重复劳动
-- 📊 **智能checkpoint**: 块级和行级双重恢复策略，适应不同场景
 """)
 
 # 检查Mordred可用性

@@ -743,16 +743,24 @@ if selected_folder:
             with col2:
                 st.metric("修改时间", file_info['modified'])
             with col3:
-                # 快速统计行数
-                with st.spinner("统计分子数..."):
-                    try:
-                        df_shape = pd.read_csv(file_path, nrows=0).shape
-                        # 快速计算行数
-                        with open(file_path, 'r') as f:
-                            row_count = sum(1 for line in f) - 1  # 减去表头
-                        st.metric("分子数量", row_count)
-                    except Exception as e:
-                        st.metric("分子数量", "读取失败")
+                # 使用session state缓存分子数统计，避免重复计算
+                cache_key = f"molecule_count_{file_path}_{file_info['modified']}"
+                
+                if cache_key not in st.session_state:
+                    # 只有当缓存中没有或文件已更新时才重新统计
+                    with st.spinner("统计分子数..."):
+                        try:
+                            df_shape = pd.read_csv(file_path, nrows=0).shape
+                            # 快速计算行数
+                            with open(file_path, 'r') as f:
+                                row_count = sum(1 for line in f) - 1  # 减去表头
+                            st.session_state[cache_key] = row_count
+                        except Exception as e:
+                            st.session_state[cache_key] = "读取失败"
+                
+                # 显示缓存的结果
+                row_count = st.session_state[cache_key]
+                st.metric("分子数量", row_count)
 
         # 筛选设置
         st.subheader("2. 筛选设置")
@@ -862,8 +870,8 @@ if selected_folder:
             else:
                 subset_size = st.number_input(
                     "筛选数量:",
-                    min_value=1,
-                    max_value=100000,
+                    #min_value=1,
+                    #max_value=100000,
                     value=1000,
                     help="直接指定要选择的分子数量"
                 )
