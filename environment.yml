@@ -1,131 +1,107 @@
+# CADD-Toolbox Environment Configuration
+# 推荐使用mamba创建环境以获得更好的性能:
+#   mamba env create -f environment.yml
+# 
+# 如果未安装mamba，请先安装:
+#   conda install mamba -n base -c conda-forge
+#
+# 或使用conda (较慢):
+#   conda env create -f environment.yml --solver=libmamba
+
 name: CADD-Toolbox
 channels:
-  - nvidia
   - rapidsai
+  - nvidia
   - conda-forge
   - pytorch
-  - defaults
 dependencies:
+  # Python版本
   - python=3.10
-  - jax
-  - jaxlib=*=*cuda*
-  - pytorch
-  - torchvision
-  - torchaudio
-  - tensorflow
-  - keras
-  - cudf
-  - cuml
-  - cupy
-  - faiss-gpu
-  - openmm=8.2.0
-  - chex
-  - dm-haiku
-  - optax
-  - optree
-  - absl-py
-  - astunparse
-  - gast
-  - google-pasta
-  - h5py
-  - protobuf
-  - tensorboard
-  - termcolor
-  - wrapt
-  - dask
-  - distributed
-  - dask-cuda
-  - dask-cudf
-  - bottleneck
-  - bzip2
-  - ca-certificates
-  - fftw
-  - libblas
-  - libcblas
-  - liblapack
-  - ncurses
-  - nomkl
-  - numexpr
-  - ocl-icd-system
-  - pip
-  - readline
-  - setuptools
-  - six
-  - sqlite
-  - tk
-  - wheel
-  - xz
-  - zlib
+  
+  # CUDA Runtime支持（根据系统CUDA版本选择）
+  - cuda-cudart  # 自动选择兼容版本
+  - cudatoolkit
+  
+  # 首先安装RAPIDS基础依赖
+  - libucxx=0.44.*
+  - ucxx=0.44.*
+  
+  # 核心科学计算库
+  - numpy
   - pandas
   - scipy
   - scikit-learn
+  
+  # RAPIDS库（按依赖顺序）
+  - cudf=24.02.*
+  - cuml=24.02.*
+  
+  # 机器学习框架
+  - pytorch
+  - torchvision
+  
+  # GPU计算库
+  - cupy
+  - faiss-gpu
+  
+  # 分子计算和化学信息学
+  - rdkit
+  - openmm=8.2.0
+  
+  # 可视化库
   - matplotlib
   - seaborn
-  - numba
-  - pynvml
-  - rdkit
+  - plotly
+  - altair
+  
+  # Web应用框架
   - streamlit
-  - transformers
-  - pyarrow
-  - networkx
-  - jinja2
-  - pyyaml
+  
+  # 数据处理和并行计算
   - tqdm
+  - numba
+  - psutil
+  - dask
+  
+  # 聚类分析
+  - hdbscan
+  
+  # 文件处理
+  - pyarrow
+  - h5py
+  
+  # 配置和工具
+  - pyyaml
   - requests
   - pillow
-  - hdbscan
-  - altair
-  - plotly
+  - jinja2
+  
+  # 降维和机器学习工具（conda管理）
+  - umap-learn
+  
+  # 系统监控和工具
+  - psutil
+  - watchdog
+  
+  # 系统依赖
+  - pip
+  - setuptools
+  - wheel
+  
+  # 仅保留conda无法安装的pip包
   - pip:
-      - ml-dtypes
-      - aiohappyeyeballs==2.6.1
-      - aiohttp==3.11.16
-      - aiosignal==1.3.2
-      - async-timeout==5.0.1
-      - blinker==1.9.0
-      - clara==1.4.0
-      - dask-expr==1.1.21
-      - datamol==0.12.5
-      - deepchem==2.8.0
-      - dgl==2.1.0
-      - etils==1.12.2
-      - faiss-gpu==1.7.2
-      - fastrlock==0.8.3
-      - flask==3.1.0
-      - frozenlist==1.5.0
-      - gitdb==4.0.12
-      - gitpython==3.1.44
-      - grpcio==1.71.0
-      - huggingface-hub==0.30.2
-      - lark-parser==0.12.0
-      - levenshtein==0.27.1
-      - libclang==18.1.1
-      - lightning==2.5.1
-      - lightning-utilities==0.14.3
-      - locket==1.0.0
+      # 日志和调试
       - loguru==0.7.3
-      - mordred==1.2.0
-      - namex==0.0.8
-      - narwhals==1.34.0
-      - nest-asyncio==1.6.0
-      - numba-cuda==0.2.0
+      
+      # GPU监控（NVIDIA专用）
       - nvidia-ml-py==12.570.86
-      - nvtx==0.2.11
-      - propcache==0.3.1
-      - pydeck==0.9.1
-      - python-levenshtein==0.27.1
+      - pynvml
+      
+      # 快速字符串匹配
       - rapidfuzz==3.13.0
-      - rpds-py==0.24.0
+      
+      # 安全张量序列化
       - safetensors==0.5.3
-      - selfies==2.2.0
-      - tensorflow-io-gcs-filesystem==0.37.1
-      - tokenizers==0.21.1
-      - torch-geometric==2.6.1
-      - torchani==2.2.4
-      - torchdata==0.11.0
-      - torchmetrics==1.7.1
-      - treelite==4.4.1
-      - umap==0.1.1
-      - umap-learn==0.5.7
-      - vadersentiment==3.3.2
-      - watchdog==6.0.0
+      
+      # 机器学习数据类型
+      - ml-dtypes
