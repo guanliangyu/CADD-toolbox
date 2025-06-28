@@ -1,0 +1,133 @@
+name: CADD-Toolbox CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache conda packages
+      uses: actions/cache@v3
+      with:
+        path: ~/conda_pkgs_dir
+        key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-conda-
+    
+    - name: Set up Miniconda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        auto-update-conda: true
+        python-version: ${{ matrix.python-version }}
+        environment-file: environment.yml
+        activate-environment: CADD-Toolbox
+        auto-activate-base: false
+    
+    - name: Conda info
+      shell: bash -l {0}
+      run: |
+        conda info
+        conda list
+    
+    - name: Test environment setup
+      shell: bash -l {0}
+      run: |
+        python test_environment.py
+    
+    - name: Run basic tests
+      shell: bash -l {0}
+      run: |
+        python -c "import streamlit; print('Streamlit imported successfully')"
+        python -c "import rdkit; print('RDKit imported successfully')"
+        python -c "from rdkit import Chem; print('RDKit Chem module working')"
+    
+    - name: Check Streamlit app syntax
+      shell: bash -l {0}
+      run: |
+        python -m py_compile Home.py
+        find pages/ -name "*.py" -exec python -m py_compile {} \;
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+    
+    - name: Install linting tools
+      run: |
+        pip install flake8 black isort
+    
+    - name: Run flake8
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Check code formatting with black
+      run: |
+        black --check --diff .
+      continue-on-error: true
+    
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only --diff .
+      continue-on-error: true
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+    
+    - name: Install security tools
+      run: |
+        pip install bandit safety
+    
+    - name: Run bandit security check
+      run: |
+        bandit -r . -f json -o bandit-report.json
+      continue-on-error: true
+    
+    - name: Upload bandit report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: bandit-report
+        path: bandit-report.json
+
+  docs:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      if: github.ref == 'refs/heads/main'
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs
+        force_orphan: true
+      continue-on-error: true 

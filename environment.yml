@@ -1,30 +1,13 @@
-# CADD-Toolbox Environment Configuration
-# 推荐使用mamba创建环境以获得更好的性能:
-#   mamba env create -f environment.yml
-# 
-# 如果未安装mamba，请先安装:
-#   conda install mamba -n base -c conda-forge
-#
-# 或使用conda (较慢):
-#   conda env create -f environment.yml --solver=libmamba
-
 name: CADD-Toolbox
 channels:
-  - rapidsai
-  - nvidia
   - conda-forge
   - pytorch
+  - nvidia
+  - rapidsai
+  - defaults
 dependencies:
-  # Python版本
   - python=3.10
-  
-  # CUDA Runtime支持（根据系统CUDA版本选择）
-  - cuda-cudart  # 自动选择兼容版本
-  - cudatoolkit
-  
-  # 首先安装RAPIDS基础依赖
-  - libucxx=0.44.*
-  - ucxx=0.44.*
+  - pip
   
   # 核心科学计算库
   - numpy
@@ -32,21 +15,8 @@ dependencies:
   - scipy
   - scikit-learn
   
-  # RAPIDS库（按依赖顺序）
-  - cudf=24.02.*
-  - cuml=24.02.*
-  
-  # 机器学习框架
-  - pytorch
-  - torchvision
-  
-  # GPU计算库
-  - cupy
-  - faiss-gpu
-  
-  # 分子计算和化学信息学
+  # 分子计算库
   - rdkit
-  - openmm=8.2.0
   
   # 可视化库
   - matplotlib
@@ -54,54 +24,41 @@ dependencies:
   - plotly
   - altair
   
-  # Web应用框架
+  # Web框架和数据处理工具
   - streamlit
-  
-  # 数据处理和并行计算
   - tqdm
-  - numba
   - psutil
-  - dask
-  
-  # 聚类分析
   - hdbscan
+  - umap-learn
+  - watchdog
   
-  # 文件处理
+  # 文件处理和配置库
   - pyarrow
   - h5py
-  
-  # 配置和工具
   - pyyaml
   - requests
   - pillow
   - jinja2
   
-  # 降维和机器学习工具（conda管理）
-  - umap-learn
+  # PyTorch (CPU版本，适合GitHub Actions)
+  - pytorch
+  - torchvision
+  - cpuonly
   
-  # 系统监控和工具
-  - psutil
-  - watchdog
+  # FAISS (CPU版本)
+  - faiss-cpu
   
-  # 系统依赖
-  - pip
-  - setuptools
-  - wheel
+  # 纯Python包
+  - loguru=0.7.3
+  - rapidfuzz=3.13.0
+  - safetensors=0.5.3
+  - ml_dtypes=0.5.*
   
-  # 仅保留conda无法安装的pip包
+  # 额外的工具包
+  - openpyxl>=3.1.0
+  - xlsxwriter>=3.1.0
+  
   - pip:
-      # 日志和调试
-      - loguru==0.7.3
-      
-      # GPU监控（NVIDIA专用）
-      - nvidia-ml-py==12.570.86
-      - pynvml
-      
-      # 快速字符串匹配
-      - rapidfuzz==3.13.0
-      
-      # 安全张量序列化
-      - safetensors==0.5.3
-      
-      # 机器学习数据类型
-      - ml-dtypes
+    - streamlit-aggrid>=0.3.4
+    - stmol>=0.0.9
+    - nvidia-ml-py==12.575.51 
