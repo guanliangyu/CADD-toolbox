@@ -5,13 +5,12 @@ CADD-Toolbox - 基础成药性筛选页面
 import os
 import pandas as pd
 import streamlit as st
-import numpy as np
+import math
+from functools import lru_cache
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Crippen, Lipinski, rdMolDescriptors
+from rdkit.Chem import Descriptors, rdMolDescriptors, FilterCatalog
 from rdkit.Chem.QED import qed
 import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
 import subprocess
 import time
 import tempfile
@@ -28,6 +27,26 @@ st.title("💊 基础成药性筛选")
 
 # 数据目录设置
 DATA_DIR = os.path.abspath("data")
+
+
+@lru_cache(maxsize=1)
+def get_pains_catalog():
+    """懒加载PAINS过滤目录"""
+    params = FilterCatalog.FilterCatalogParams()
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
+    return FilterCatalog.FilterCatalog(params)
+
+
+def evaluate_pains(mol: Chem.Mol):
+    """返回分子是否命中PAINS及命中列表"""
+    catalog = get_pains_catalog()
+    matches = catalog.GetMatches(mol)
+    if not matches:
+        return False, 0, ""
+    hits = [match.GetDescription() for match in matches]
+    return True, len(hits), ";".join(hits)
 
 def list_data_folders():
     """列出data目录下的所有文件夹"""
@@ -53,7 +72,7 @@ def list_csv_files_in_folder(folder_name):
             files.append(item)
     return sorted(files)
 
-def calculate_druglike_properties(smiles):
+def calculate_druglike_properties(smiles, enable_pains: bool = True):
     """计算成药性相关属性"""
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -95,6 +114,14 @@ def calculate_druglike_properties(smiles):
     properties['LabuteASA'] = Descriptors.LabuteASA(mol)
     properties['PEOE_VSA1'] = Descriptors.PEOE_VSA1(mol)
     properties['PEOE_VSA2'] = Descriptors.PEOE_VSA2(mol)
+    
+    if enable_pains:
+        pains_flag, pains_count, pains_hits = evaluate_pains(mol)
+    else:
+        pains_flag, pains_count, pains_hits = False, 0, ""
+    properties['PAINS_Flag'] = pains_flag
+    properties['PAINS_HitCount'] = pains_count
+    properties['PAINS_Hits'] = pains_hits
     
     return properties
 
@@ -229,15 +256,15 @@ def create_property_distribution_plot(df, property_name):
     # 直方图
     ax.hist(df[property_name].dropna(), bins=50, alpha=0.7, color='skyblue', edgecolor='black')
     ax.set_xlabel(property_name)
-    ax.set_ylabel('频数')
-    ax.set_title(f'{property_name} 分布')
+    ax.set_ylabel('Count')
+    ax.set_title(f'{property_name} Distribution')
     ax.grid(True, alpha=0.3)
     
     # 添加统计信息
     mean_val = df[property_name].mean()
     median_val = df[property_name].median()
-    ax.axvline(mean_val, color='red', linestyle='--', label=f'均值: {mean_val:.2f}')
-    ax.axvline(median_val, color='green', linestyle='--', label=f'中位数: {median_val:.2f}')
+    ax.axvline(mean_val, color='red', linestyle='--', label=f'Mean: {mean_val:.2f}')
+    ax.axvline(median_val, color='green', linestyle='--', label=f'Median: {median_val:.2f}')
     ax.legend()
     
     plt.tight_layout()
@@ -245,16 +272,37 @@ def create_property_distribution_plot(df, property_name):
 
 # ====================== 分块并行处理函数 ======================
 
-def generate_druglike_script():
+def generate_druglike_script(enable_pains: bool):
     """生成成药性计算的Python脚本模板"""
     script_content = '''
 import os
 import sys
 import pandas as pd
-import numpy as np
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Crippen, Lipinski, rdMolDescriptors
+from functools import lru_cache
+from rdkit.Chem import Descriptors, rdMolDescriptors, FilterCatalog
 from rdkit.Chem.QED import qed
+
+ENABLE_PAINS = PLACEHOLDER
+
+@lru_cache(maxsize=1)
+def get_pains_catalog():
+    params = FilterCatalog.FilterCatalogParams()
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_A)
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_B)
+    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS_C)
+    return FilterCatalog.FilterCatalog(params)
+
+
+def evaluate_pains(mol):
+    if not ENABLE_PAINS:
+        return False, 0, ""
+    catalog = get_pains_catalog()
+    matches = catalog.GetMatches(mol)
+    if not matches:
+        return False, 0, ""
+    hits = [match.GetDescription() for match in matches]
+    return True, len(hits), ";".join(hits)
 
 def calculate_druglike_properties(smiles):
     """计算成药性相关属性"""
@@ -299,6 +347,11 @@ def calculate_druglike_properties(smiles):
     properties['PEOE_VSA1'] = Descriptors.PEOE_VSA1(mol)
     properties['PEOE_VSA2'] = Descriptors.PEOE_VSA2(mol)
     
+    pains_flag, pains_count, pains_hits = evaluate_pains(mol)
+    properties['PAINS_Flag'] = pains_flag
+    properties['PAINS_HitCount'] = pains_count
+    properties['PAINS_Hits'] = pains_hits
+
     return properties
 
 def check_lipinski_rule(properties):
@@ -422,20 +475,22 @@ if __name__ == "__main__":
         df.iloc[:0].to_csv(output_file, index=False)
         print("没有有效分子")
 '''
-    return script_content
+    return script_content.replace("PLACEHOLDER", str(enable_pains))
 
 def split_dataframe_to_chunks(df, num_chunks, temp_dir):
     """将DataFrame分割成多个块文件"""
     chunk_files = []
-    chunk_size = len(df) // num_chunks
-    
+    if len(df) == 0 or num_chunks <= 0:
+        return chunk_files
+
+    chunk_size = max(1, math.ceil(len(df) / num_chunks))
+
     for i in range(num_chunks):
         start_idx = i * chunk_size
-        if i == num_chunks - 1:  # 最后一块包含剩余所有数据
-            chunk_df = df.iloc[start_idx:]
-        else:
-            chunk_df = df.iloc[start_idx:start_idx + chunk_size]
-        
+        if start_idx >= len(df):
+            break
+        end_idx = min(start_idx + chunk_size, len(df))
+        chunk_df = df.iloc[start_idx:end_idx]
         chunk_file = os.path.join(temp_dir, f"chunk_{i}.csv")
         chunk_df.to_csv(chunk_file, index=False)
         chunk_files.append(chunk_file)
@@ -493,6 +548,21 @@ with col2:
         selected_file = ""
         st.info("请先选择工作目录")
 
+current_file_key = f"{selected_folder}/{selected_file}" if selected_folder and selected_file else None
+previous_file_key = st.session_state.get("_active_druglike_file")
+
+if current_file_key != previous_file_key:
+    for key in [
+        'druglike_df',
+        'filtered_df',
+        'original_count',
+        'valid_count',
+        'invalid_count',
+        'validation_summary'
+    ]:
+        st.session_state.pop(key, None)
+    st.session_state['_active_druglike_file'] = current_file_key
+
 # 数据处理部分
 if selected_folder and selected_file:
     st.markdown("---")
@@ -515,7 +585,13 @@ if selected_folder and selected_file:
         
         # 成药性计算
         st.header("🧮 成药性属性计算")
-        
+        enable_pains = st.checkbox(
+            "Enable PAINS pattern detection",
+            value=True,
+            help="Uncheck to skip PAINS substructure matching for faster processing"
+        )
+        st.session_state['enable_pains_flag'] = enable_pains
+
         # 并行处理参数设置
         st.subheader("⚙️ 并行处理设置")
         
@@ -539,7 +615,7 @@ if selected_folder and selected_file:
                     
                     try:
                         # 生成处理脚本
-                        script_content = generate_druglike_script()
+                        script_content = generate_druglike_script(enable_pains)
                         script_file = os.path.join(temp_dir, "druglike_processor.py")
                         with open(script_file, 'w', encoding='utf-8') as f:
                             f.write(script_content)
@@ -617,12 +693,13 @@ if selected_folder and selected_file:
                     valid_smiles = []
                     invalid_count = 0
                     
-                    progress_bar = st.progress(0)
+                    total_smiles = len(df)
+                    progress_bar = st.progress(0.0)
+                    update_step = max(1, total_smiles // 200) if total_smiles else 1
                     
                     for i, smiles in enumerate(df['SMILES']):
-                        progress_bar.progress((i + 1) / len(df))
                         
-                        props = calculate_druglike_properties(smiles)
+                        props = calculate_druglike_properties(smiles, enable_pains=enable_pains)
                         if props is not None:
                             # 添加规则检查
                             lipinski_rules = check_lipinski_rule(props)
@@ -636,6 +713,8 @@ if selected_folder and selected_file:
                             valid_smiles.append(smiles)
                         else:
                             invalid_count += 1
+                        if ((i + 1) % update_step == 0) or (i + 1 == total_smiles):
+                            progress_bar.progress((i + 1) / total_smiles if total_smiles else 1.0)
                     
                     if properties_list:
                         # 创建属性DataFrame
@@ -655,6 +734,8 @@ if selected_folder and selected_file:
                     else:
                         st.error("没有有效的分子可以计算属性")
                         st.stop()
+                    if total_smiles == 0:
+                        progress_bar.progress(1.0)
         
         # 如果已经计算了属性，显示筛选界面
         if 'druglike_df' in st.session_state:
@@ -698,6 +779,21 @@ if selected_folder and selected_file:
                 st.metric("Muegge规则通过", f"{muegge_pass}/{len(result_df)}", 
                          f"{muegge_pass/len(result_df)*100:.1f}%")
             
+            if 'PAINS_Flag' in result_df.columns:
+                pains_cols = st.columns(2)
+                pains_hits = int(result_df['PAINS_Flag'].sum())
+                with pains_cols[0]:
+                    st.metric("PAINS命中数", f"{pains_hits}/{len(result_df)}")
+                with pains_cols[1]:
+                    hit_rate = (pains_hits / len(result_df) * 100) if len(result_df) else 0
+                    st.metric("PAINS命中率", f"{hit_rate:.1f}%")
+                
+                if pains_hits:
+                    with st.expander("查看PAINS命中分子", expanded=False):
+                        pains_preview_cols = ['ID', 'SMILES', 'PAINS_Hits']
+                        available_cols = [c for c in pains_preview_cols if c in result_df.columns]
+                        st.dataframe(result_df[result_df['PAINS_Flag']][available_cols].head(20))
+            
             # 属性分布可视化
             st.subheader("📈 属性分布")
             
@@ -727,7 +823,33 @@ if selected_folder and selected_file:
                 use_egan = st.checkbox("应用Egan规则", value=False)
             with rule_filter_cols[3]:
                 use_muegge = st.checkbox("应用Muegge规则", value=False)
-            
+
+            exclude_pains = False
+            pains_keep = False
+            if 'PAINS_Flag' in result_df.columns:
+                pains_filter_cols = st.columns(2)
+                with pains_filter_cols[0]:
+                    exclude_pains = st.checkbox(
+                        "剔除PAINS命中分子",
+                        value=enable_pains,
+                        help="去除命中PAINS警示模式的分子（A/B/C库）"
+                    )
+                with pains_filter_cols[1]:
+                    pains_keep = st.checkbox(
+                        "仅保留PAINS命中",
+                        value=False,
+                        help="启用后将只保留命中PAINS的分子",
+                        key="keep_pains_only"
+                    )
+                    if pains_keep:
+                        exclude_pains = False
+                pains_mode = {
+                    'exclude': exclude_pains,
+                    'keep_only': pains_keep
+                }
+            else:
+                pains_mode = {'exclude': False, 'keep_only': False}
+
             # 自定义范围筛选
             st.subheader("⚙️ 自定义范围筛选")
             
@@ -797,7 +919,11 @@ if selected_folder and selected_file:
                     filtered_df = filtered_df[filtered_df['Egan_Pass'] == True]
                 if use_muegge:
                     filtered_df = filtered_df[filtered_df['Muegge_Pass'] == True]
-                
+                if pains_mode.get('keep_only') and 'PAINS_Flag' in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df['PAINS_Flag'] == True]
+                elif pains_mode.get('exclude') and 'PAINS_Flag' in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df['PAINS_Flag'] == False]
+
                 # 应用自定义范围筛选
                 if filter_conditions:
                     filtered_df = apply_custom_filters(filtered_df, filter_conditions)
@@ -828,7 +954,7 @@ if selected_folder and selected_file:
                 st.subheader("📄 筛选后数据预览")
                 
                 # 选择要显示的列
-                display_cols = ['ID', 'SMILES', 'MolWt', 'LogP', 'HBD', 'HBA', 'TPSA', 'RotBonds', 'QED']
+                display_cols = ['ID', 'SMILES', 'MolWt', 'LogP', 'HBD', 'HBA', 'TPSA', 'RotBonds', 'QED', 'PAINS_Flag', 'PAINS_HitCount']
                 available_display_cols = [col for col in display_cols if col in filtered_df.columns]
                 
                 st.dataframe(filtered_df[available_display_cols].head(20))
@@ -862,7 +988,7 @@ if selected_folder and selected_file:
                             save_df = filtered_df
                         else:
                             # 保存关键列
-                            key_cols = ['ID', 'SMILES'] + [col for col in ['MolWt', 'LogP', 'HBD', 'HBA', 'TPSA', 'RotBonds', 'QED'] if col in filtered_df.columns]
+                            key_cols = ['ID', 'SMILES'] + [col for col in ['MolWt', 'LogP', 'HBD', 'HBA', 'TPSA', 'RotBonds', 'QED', 'PAINS_Flag', 'PAINS_HitCount', 'PAINS_Hits'] if col in filtered_df.columns]
                             # 添加其他原始列
                             other_original_cols = [col for col in df.columns if col not in key_cols and col in filtered_df.columns]
                             save_df = filtered_df[key_cols + other_original_cols]

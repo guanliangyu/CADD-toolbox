@@ -3,25 +3,18 @@ CADD-Toolbox - 2D分子描述符生成页面
 基于SMILES生成多种2D分子描述符和指纹
 """
 import os
+import time
+import multiprocessing as mp
+
 import pandas as pd
 import streamlit as st
 import numpy as np
-from rdkit import Chem
-from rdkit.Chem import Descriptors, Crippen, Lipinski, rdMolDescriptors, rdFingerprintGenerator
+from rdkit import Chem, DataStructs
+from rdkit.Chem import Descriptors, rdMolDescriptors
 from rdkit.Chem.QED import qed
-from rdkit.Chem.Descriptors import rdMolDescriptors as rdMolDesc
-from rdkit.Chem import rdMolDescriptors as rdMD
 from rdkit.Chem.AtomPairs import Pairs, Torsions
-from rdkit.Chem.Pharm2D import Generate, Gobbi_Pharm2D
 from rdkit.Chem import AllChem
 from rdkit.Avalon import pyAvalonTools
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import multiprocessing
-from tqdm import tqdm
 
 # 设置页面配置
 st.set_page_config(
@@ -34,6 +27,21 @@ st.title("🧬 生成2D分子描述符")
 
 # 数据目录设置
 DATA_DIR = os.path.abspath("data")
+
+
+def build_molecule_cache(smiles_series):
+    """预解析SMILES以缓存RDKit分子对象"""
+    mols = []
+    valid_flags = np.zeros(len(smiles_series), dtype=bool)
+    for idx, smiles in enumerate(smiles_series):
+        if pd.isna(smiles):
+            mols.append(None)
+            continue
+        mol = Chem.MolFromSmiles(str(smiles))
+        if mol is not None:
+            valid_flags[idx] = True
+        mols.append(mol)
+    return mols, pd.Series(valid_flags, index=smiles_series.index)
 
 def list_data_folders():
     """列出data目录下的所有文件夹"""
@@ -55,20 +63,10 @@ def list_csv_files_in_folder(folder_name):
         return []
     return [f for f in os.listdir(folder_path) if f.lower().endswith('.csv') and os.path.isfile(os.path.join(folder_path, f))]
 
-def validate_smiles(smiles):
-    """验证SMILES字符串"""
-    if pd.isna(smiles):
-        return False
-    try:
-        mol = Chem.MolFromSmiles(str(smiles))
-        return mol is not None
-    except:
-        return False
-
-def generate_molecular_descriptors(smiles_series, progress_callback=None):
+def generate_molecular_descriptors(mol_cache, progress_callback=None):
     """生成分子描述符"""
     descriptors = []
-    
+
     descriptor_functions = {
         'MolWt': Descriptors.MolWt,
         'LogP': Descriptors.MolLogP,
@@ -80,7 +78,7 @@ def generate_molecular_descriptors(smiles_series, progress_callback=None):
         'NumAliphaticRings': Descriptors.NumAliphaticRings,
         'NumHeavyAtoms': Descriptors.HeavyAtomCount,
         'NumHeteroatoms': Descriptors.NumHeteroatoms,
-        'FractionCsp3': Descriptors.FractionCsp3,
+        'FractionCsp3': lambda mol: rdMolDescriptors.CalcFractionCSP3(mol),
         'Chi0v': Descriptors.Chi0v,
         'Chi1v': Descriptors.Chi1v,
         'Chi2v': Descriptors.Chi2v,
@@ -123,117 +121,143 @@ def generate_molecular_descriptors(smiles_series, progress_callback=None):
         'BCUT2D_MRHI': Descriptors.BCUT2D_MRHI,
         'BCUT2D_MRLOW': Descriptors.BCUT2D_MRLOW,
     }
-    
-    for i, smiles in enumerate(smiles_series):
+
+    total = len(mol_cache)
+    descriptor_names = list(descriptor_functions.keys())
+
+    if total == 0:
+        return pd.DataFrame(columns=descriptor_names)
+
+    for i, mol in enumerate(mol_cache):
         row_descriptors = {}
-        
-        if pd.isna(smiles):
-            # 填充NaN值
-            for desc_name in descriptor_functions:
+
+        if mol is None:
+            for desc_name in descriptor_names:
                 row_descriptors[desc_name] = np.nan
         else:
             try:
-                mol = Chem.MolFromSmiles(str(smiles))
-                if mol is not None:
-                    for desc_name, desc_func in descriptor_functions.items():
-                        try:
-                            value = desc_func(mol)
-                            row_descriptors[desc_name] = value
-                        except:
-                            row_descriptors[desc_name] = np.nan
-                else:
-                    # 无效SMILES
-                    for desc_name in descriptor_functions:
+                for desc_name, desc_func in descriptor_functions.items():
+                    try:
+                        value = desc_func(mol)
+                        row_descriptors[desc_name] = value
+                    except Exception:
                         row_descriptors[desc_name] = np.nan
             except:
                 # SMILES解析失败
-                for desc_name in descriptor_functions:
+                for desc_name in descriptor_names:
                     row_descriptors[desc_name] = np.nan
-        
-        descriptors.append(row_descriptors)
-        
-        if progress_callback and (i + 1) % 100 == 0:
-            progress_callback(i + 1, len(smiles_series))
-    
-    return pd.DataFrame(descriptors)
 
-def generate_fingerprints(smiles_series, fp_type='morgan', radius=2, nbits=1024, progress_callback=None):
+        descriptors.append(row_descriptors)
+
+        if progress_callback and ((i + 1) % 100 == 0 or i + 1 == total):
+            progress_callback(i + 1, total)
+
+    return pd.DataFrame(descriptors, columns=descriptor_names)
+
+
+def bitvect_to_array(bitvect, size):
+    arr = np.zeros((size,), dtype=np.uint8)
+    DataStructs.ConvertToNumpyArray(bitvect, arr)
+    return arr
+
+
+def generate_fingerprints(mol_cache, fp_type='morgan', radius=2, nbits=1024, progress_callback=None):
     """生成分子指纹"""
     fingerprints = []
-    
-    for i, smiles in enumerate(smiles_series):
-        if pd.isna(smiles):
-            # 填充零向量
-            fingerprints.append([0] * nbits)
+    total = len(mol_cache)
+
+    if fp_type == 'maccs':
+        bit_length = 167
+    else:
+        bit_length = nbits
+
+    if total == 0:
+        if fp_type == 'maccs':
+            fp_columns = [f'MACCS_{i}' for i in range(bit_length)]
+        else:
+            fp_columns = [f'{fp_type.upper()}_FP_{i}' for i in range(bit_length)]
+        return pd.DataFrame(columns=fp_columns, dtype=np.uint8)
+
+    for i, mol in enumerate(mol_cache):
+        if mol is None:
+            fp_arrays = np.zeros((bit_length,), dtype=np.uint8)
         else:
             try:
-                mol = Chem.MolFromSmiles(str(smiles))
-                if mol is not None:
-                    if fp_type == 'morgan':
-                        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
-                    elif fp_type == 'rdkit':
-                        fp = Chem.RDKFingerprint(mol, fpSize=nbits)
-                    elif fp_type == 'maccs':
-                        fp = rdMolDescriptors.GetMACCSKeysFingerprint(mol)
-                        # MACCS键固定为167位
-                        fingerprints.append(list(fp))
-                        if progress_callback and (i + 1) % 100 == 0:
-                            progress_callback(i + 1, len(smiles_series))
-                        continue
-                    elif fp_type == 'avalon':
-                        fp = pyAvalonTools.GetAvalonFP(mol, nbits)
-                    elif fp_type == 'atompairs':
-                        fp = Pairs.GetAtomPairFingerprintAsBitVect(mol, nBits=nbits)
-                    elif fp_type == 'torsions':
-                        fp = Torsions.GetTopologicalTorsionFingerprintAsBitVect(mol, nBits=nbits)
-                    else:
-                        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
-                    
-                    fingerprints.append(list(fp))
-                else:
-                    # 无效分子
-                    fingerprints.append([0] * nbits)
-            except:
-                # 处理失败
-                fingerprints.append([0] * nbits)
-        
-        if progress_callback and (i + 1) % 100 == 0:
-            progress_callback(i + 1, len(smiles_series))
-    
-    # 为指纹位创建列名
-    if fp_type == 'maccs':
-        fp_columns = [f'MACCS_{i}' for i in range(167)]
-    else:
-        fp_columns = [f'{fp_type.upper()}_FP_{i}' for i in range(nbits)]
-    
-    return pd.DataFrame(fingerprints, columns=fp_columns)
-
-def generate_2d_descriptors_batch(smiles_batch, descriptor_types, fp_config):
-    """批量生成2D描述符"""
-    batch_results = {}
-    
-    # 生成分子描述符
-    if 'molecular_descriptors' in descriptor_types:
-        batch_results['molecular_descriptors'] = generate_molecular_descriptors(smiles_batch)
-    
-    # 生成指纹
-    for fp_type in ['morgan', 'rdkit', 'maccs', 'avalon', 'atompairs', 'torsions']:
-        if fp_type in descriptor_types:
-            if fp_type in fp_config:
-                config = fp_config[fp_type]
                 if fp_type == 'morgan':
-                    fp_df = generate_fingerprints(smiles_batch, fp_type, 
-                                                radius=config['radius'], 
-                                                nbits=config['nbits'])
+                    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
+                elif fp_type == 'rdkit':
+                    fp = Chem.RDKFingerprint(mol, fpSize=nbits)
                 elif fp_type == 'maccs':
-                    fp_df = generate_fingerprints(smiles_batch, fp_type)
-                elif fp_type in ['rdkit', 'avalon', 'atompairs', 'torsions']:
-                    fp_df = generate_fingerprints(smiles_batch, fp_type, 
-                                                nbits=config['nbits'])
-                
-                batch_results[fp_type] = fp_df
-    
-    return batch_results
+                    fp = rdMolDescriptors.GetMACCSKeysFingerprint(mol)
+                elif fp_type == 'avalon':
+                    fp = pyAvalonTools.GetAvalonFP(mol, bit_length)
+                elif fp_type == 'atompairs':
+                    fp = Pairs.GetAtomPairFingerprintAsBitVect(mol, nBits=bit_length)
+                elif fp_type == 'torsions':
+                    fp = Torsions.GetTopologicalTorsionFingerprintAsBitVect(mol, nBits=bit_length)
+                else:
+                    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
+
+                fp_arrays = bitvect_to_array(fp, bit_length)
+            except Exception:
+                fp_arrays = np.zeros((bit_length,), dtype=np.uint8)
+
+        fingerprints.append(fp_arrays)
+
+        if progress_callback and ((i + 1) % 100 == 0 or i + 1 == total):
+            progress_callback(i + 1, total)
+
+    fingerprints = np.vstack(fingerprints)
+
+    if fp_type == 'maccs':
+        fp_columns = [f'MACCS_{i}' for i in range(bit_length)]
+    else:
+        fp_columns = [f'{fp_type.upper()}_FP_{i}' for i in range(bit_length)]
+
+    return pd.DataFrame(fingerprints, columns=fp_columns, dtype=np.uint8)
+
+
+def process_chunk_worker(args):
+    """子进程处理器：根据配置生成描述符并返回结果"""
+    chunk_records, descriptor_types, fingerprint_types, fp_config = args
+    chunk_df = pd.DataFrame(chunk_records)
+    if chunk_df.empty:
+        return chunk_df
+
+    row_ids = chunk_df['__row_id'].to_numpy()
+    chunk_df = chunk_df.drop(columns='__row_id').reset_index(drop=True)
+
+    smiles_series = chunk_df['SMILES']
+    mol_cache, _ = build_molecule_cache(smiles_series)
+
+    combined = chunk_df.copy()
+
+    if 'molecular_descriptors' in descriptor_types:
+        combined = pd.concat([combined, generate_molecular_descriptors(mol_cache)], axis=1)
+
+    for fp_type in fingerprint_types:
+        if fp_type == 'morgan':
+            config = fp_config.get('morgan', {'radius': 2, 'nbits': 1024})
+            fp_df = generate_fingerprints(
+                mol_cache,
+                fp_type,
+                radius=config.get('radius', 2),
+                nbits=config.get('nbits', 1024)
+            )
+        elif fp_type == 'maccs':
+            fp_df = generate_fingerprints(mol_cache, fp_type)
+        else:
+            config = fp_config.get(fp_type, {'nbits': 1024})
+            fp_df = generate_fingerprints(
+                mol_cache,
+                fp_type,
+                nbits=config.get('nbits', 1024)
+            )
+
+        combined = pd.concat([combined, fp_df], axis=1)
+
+    combined['__row_id'] = row_ids
+    return combined
 
 st.markdown("""
 基于SMILES字符串生成多种2D分子描述符和指纹，用于机器学习和QSAR建模。
@@ -326,29 +350,40 @@ if 'selected_file' in locals() and selected_file:
             help="选择包含SMILES字符串的列"
         )
         
-        # 验证SMILES有效性
+        # 构建分子缓存并验证有效性
         if smiles_column:
             smiles_series = df[smiles_column]
-            valid_smiles = smiles_series.apply(validate_smiles)
-            valid_count = valid_smiles.sum()
-            invalid_count = len(smiles_series) - valid_count
-            
+            cache_key = (selected_folder, selected_file, smiles_column)
+
+            if st.session_state.get('mol_cache_key') != cache_key:
+                with st.spinner("正在解析SMILES并构建分子缓存..."):
+                    mol_cache, valid_mask = build_molecule_cache(smiles_series)
+                st.session_state['mol_cache_key'] = cache_key
+                st.session_state['mol_cache'] = mol_cache
+                st.session_state['mol_valid_mask'] = valid_mask
+            else:
+                mol_cache = st.session_state['mol_cache']
+                valid_mask = st.session_state['mol_valid_mask']
+
+            valid_count = int(valid_mask.sum())
+            total_smiles = len(valid_mask)
+            invalid_count = total_smiles - valid_count
+
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("有效SMILES", valid_count, delta=f"{valid_count/len(smiles_series)*100:.1f}%")
+                st.metric("有效SMILES", valid_count, delta=f"{valid_count/total_smiles*100:.1f}%")
             with col2:
-                st.metric("无效SMILES", invalid_count, delta=f"{invalid_count/len(smiles_series)*100:.1f}%")
+                st.metric("无效SMILES", invalid_count, delta=f"{invalid_count/total_smiles*100:.1f}%")
             with col3:
-                st.metric("有效率", f"{valid_count/len(smiles_series)*100:.1f}%")
-            
+                st.metric("有效率", f"{valid_count/total_smiles*100:.1f}%")
+
             if invalid_count > 0:
                 st.warning(f"发现 {invalid_count} 个无效SMILES，将在生成描述符时用NaN填充")
-                
-                # 显示一些无效的SMILES例子
-                invalid_smiles = smiles_series[~valid_smiles].dropna().head(5)
-                if len(invalid_smiles) > 0:
+
+                invalid_examples = smiles_series[~valid_mask].dropna().head(5)
+                if not invalid_examples.empty:
                     with st.expander("查看无效SMILES示例"):
-                        for idx, smiles in invalid_smiles.items():
+                        for idx, smiles in invalid_examples.items():
                             st.code(f"行 {idx}: {smiles}")
         
     except Exception as e:
@@ -536,43 +571,21 @@ if 'df' in locals():
 # 处理选项
 st.header("4. ⚙️ 处理选项")
 
-col1, col2, col3 = st.columns(3)
+processing_options = [
+    "处理所有分子",
+    "仅处理前100个分子",
+    "仅处理前500个分子",
+    "仅处理前1000个分子"
+]
 
-with col1:
-    # 处理范围
-    processing_options = [
-        "处理所有分子",
-        "仅处理前100个分子",
-        "仅处理前500个分子",
-        "仅处理前1000个分子"
-    ]
-    selected_scope = st.selectbox(
-        "处理范围:",
-        options=processing_options,
-        index=0,
-        help="选择要处理的分子数量"
-    )
+selected_scope = st.selectbox(
+    "处理范围:",
+    options=processing_options,
+    index=0,
+    help="选择要处理的分子数量"
+)
 
-with col2:
-    # 并行处理
-    cpu_cores = multiprocessing.cpu_count()
-    num_threads = st.number_input(
-        "并行线程数:",
-        min_value=1,
-        max_value=cpu_cores,
-        value=min(4, cpu_cores),
-        help=f"系统有{cpu_cores}个CPU核心"
-    )
-
-with col3:
-    # 批处理大小
-    batch_size = st.number_input(
-        "批处理大小:",
-        min_value=50,
-        max_value=1000,
-        value=200,
-        help="每批处理的分子数量"
-    )
+st.caption("当前版本采用单线程顺序处理，如需更快速度可减少指纹位数或分批导出。")
 
 # 确定处理数量
 if 'df' in locals():
@@ -585,7 +598,19 @@ if 'df' in locals():
         molecules_to_process = min(500, total_molecules)
     elif selected_scope == "仅处理前1000个分子":
         molecules_to_process = min(1000, total_molecules)
-    
+    else:
+        molecules_to_process = total_molecules
+
+    max_workers = max(1, mp.cpu_count() or 1)
+    worker_count = st.slider(
+        "并行进程数:",
+        min_value=1,
+        max_value=max_workers,
+        value=min(4, max_workers),
+        help="自动检测CPU核心数，可根据数据量调整并行进程数"
+    )
+
+    st.caption("当数据量较大时建议使用多进程，数据量很小时单进程更高效。")
     st.info(f"将处理 {molecules_to_process} 个分子")
 
 # 生成描述符
@@ -598,71 +623,112 @@ if 'df' in locals() and 'smiles_column' in locals() and descriptor_types:
         # 准备数据
         df_subset = df.head(molecules_to_process).copy()
         smiles_series = df_subset[smiles_column]
-        
+
+        mol_cache = st.session_state.get('mol_cache')
+        valid_mask_series = st.session_state.get('mol_valid_mask')
+        if mol_cache is None or valid_mask_series is None:
+            mol_cache, valid_mask_series = build_molecule_cache(df[smiles_column])
+            st.session_state['mol_cache'] = mol_cache
+            st.session_state['mol_valid_mask'] = valid_mask_series
+            st.session_state['mol_cache_key'] = (selected_folder, selected_file, smiles_column)
+
+        mol_subset = mol_cache[:molecules_to_process]
+
         st.info(f"开始生成2D描述符，共 {len(df_subset)} 个分子...")
-        
-        # 创建进度条
+
         progress_bar = st.progress(0.0)
         status_text = st.empty()
-        
-        # 生成描述符
-        all_descriptors = []
-        
+
+        use_parallel = worker_count > 1 and len(df_subset) >= worker_count * 2
+
         try:
-            # 分子描述符
-            if 'molecular_descriptors' in descriptor_types:
-                status_text.text("正在生成分子描述符...")
-                
-                def update_progress(current, total):
-                    progress = current / total * 0.3  # 分子描述符占30%
-                    progress_bar.progress(progress)
-                    status_text.text(f"正在生成分子描述符... {current}/{total}")
-                
-                mol_desc_df = generate_molecular_descriptors(smiles_series, update_progress)
-                all_descriptors.append(mol_desc_df)
-                st.success(f"✅ 分子描述符生成完成: {len(mol_desc_df.columns)} 个描述符")
-            
-            # 分子指纹
-            fingerprint_progress_start = 0.3 if 'molecular_descriptors' in descriptor_types else 0.0
-            fingerprint_progress_per_type = (1.0 - fingerprint_progress_start) / len(fingerprint_types) if fingerprint_types else 0
-            
-            for i, fp_type in enumerate(fingerprint_types):
-                status_text.text(f"正在生成{fp_type.upper()}指纹...")
-                
-                def update_fp_progress(current, total):
-                    base_progress = fingerprint_progress_start + i * fingerprint_progress_per_type
-                    type_progress = (current / total) * fingerprint_progress_per_type
-                    progress_bar.progress(base_progress + type_progress)
-                    status_text.text(f"正在生成{fp_type.upper()}指纹... {current}/{total}")
-                
-                if fp_type == 'morgan':
-                    fp_df = generate_fingerprints(smiles_series, fp_type, 
-                                                radius=fp_config[fp_type]['radius'],
-                                                nbits=fp_config[fp_type]['nbits'],
-                                                progress_callback=update_fp_progress)
-                elif fp_type == 'maccs':
-                    fp_df = generate_fingerprints(smiles_series, fp_type, 
-                                                progress_callback=update_fp_progress)
-                elif fp_type in ['rdkit', 'avalon', 'atompairs', 'torsions']:
-                    fp_df = generate_fingerprints(smiles_series, fp_type,
-                                                nbits=fp_config[fp_type]['nbits'],
-                                                progress_callback=update_fp_progress)
-                
-                all_descriptors.append(fp_df)
-                st.success(f"✅ {fp_type.upper()}指纹生成完成: {len(fp_df.columns)} 个特征")
-            
-            # 合并所有描述符
-            status_text.text("正在合并描述符...")
-            progress_bar.progress(0.95)
-            
-            # 合并原始数据和描述符
-            final_df = df_subset.copy()
-            for desc_df in all_descriptors:
-                final_df = pd.concat([final_df, desc_df], axis=1)
-            
+            if len(df_subset) == 0:
+                final_df = df_subset.copy()
+            elif use_parallel:
+                status_text.text("正在并行生成描述符...")
+                num_chunks = max(1, min(len(df_subset), worker_count * 2))
+                chunk_indices = [idxs for idxs in np.array_split(np.arange(len(df_subset)), num_chunks) if len(idxs) > 0]
+
+                if not chunk_indices:
+                    final_df = df_subset.copy()
+                else:
+                    tasks = []
+                    for idxs in chunk_indices:
+                        chunk_df = df_subset.iloc[idxs].copy()
+                        chunk_df['__row_id'] = chunk_df.index
+                        tasks.append((chunk_df.to_dict(orient='records'), descriptor_types, fingerprint_types, fp_config))
+
+                    results = []
+                    ctx = mp.get_context("spawn")
+                    with ctx.Pool(processes=worker_count) as pool:
+                        for completed, chunk_result in enumerate(pool.imap_unordered(process_chunk_worker, tasks), start=1):
+                            results.append(chunk_result)
+                            progress_bar.progress(min(0.95, completed / len(chunk_indices)))
+                            status_text.text(f"并行处理中... {completed}/{len(chunk_indices)} 批完成")
+
+                    final_df = pd.concat(results, ignore_index=True)
+                    final_df = final_df.sort_values('__row_id').drop(columns='__row_id').reset_index(drop=True)
+
+            else:
+                all_descriptors = []
+
+                if 'molecular_descriptors' in descriptor_types:
+                    status_text.text("正在生成分子描述符...")
+
+                    def update_progress(current, total):
+                        progress = current / total * 0.4
+                        progress_bar.progress(min(0.95, progress))
+                        status_text.text(f"正在生成分子描述符... {current}/{total}")
+
+                    mol_desc_df = generate_molecular_descriptors(mol_subset, update_progress)
+                    all_descriptors.append(mol_desc_df)
+                    st.success(f"✅ 分子描述符生成完成: {len(mol_desc_df.columns)} 个描述符")
+
+                fingerprint_progress_start = 0.4 if 'molecular_descriptors' in descriptor_types else 0.0
+                fingerprint_progress_per_type = (1.0 - fingerprint_progress_start) / len(fingerprint_types) if fingerprint_types else 0
+
+                for i, fp_type in enumerate(fingerprint_types):
+                    status_text.text(f"正在生成{fp_type.upper()}指纹...")
+
+                    def update_fp_progress(current, total, base=fingerprint_progress_start, idx=i, label=fp_type.upper()):
+                        base_progress = base + idx * fingerprint_progress_per_type
+                        type_progress = (current / total) * fingerprint_progress_per_type if total else 0
+                        progress_bar.progress(min(0.95, base_progress + type_progress))
+                        status_text.text(f"正在生成{label}指纹... {current}/{total}")
+
+                    if fp_type == 'morgan':
+                        fp_df = generate_fingerprints(
+                            mol_subset,
+                            fp_type,
+                            radius=fp_config[fp_type]['radius'],
+                            nbits=fp_config[fp_type]['nbits'],
+                            progress_callback=update_fp_progress
+                        )
+                    elif fp_type == 'maccs':
+                        fp_df = generate_fingerprints(
+                            mol_subset,
+                            fp_type,
+                            progress_callback=update_fp_progress
+                        )
+                    else:
+                        fp_df = generate_fingerprints(
+                            mol_subset,
+                            fp_type,
+                            nbits=fp_config[fp_type]['nbits'],
+                            progress_callback=update_fp_progress
+                        )
+
+                    all_descriptors.append(fp_df)
+                    st.success(f"✅ {fp_type.upper()}指纹生成完成: {len(fp_df.columns)} 个特征")
+
+                final_df = df_subset.copy()
+                for desc_df in all_descriptors:
+                    final_df = pd.concat([final_df, desc_df], axis=1)
+
             progress_bar.progress(1.0)
+            status_text.text("处理完成")
             total_time = time.time() - start_time
-            
+
             st.success(f"🎉 2D描述符生成完成！")
             st.info(f"总耗时: {total_time:.1f}秒 | 最终数据: {len(final_df)} 行 × {len(final_df.columns)} 列")
             
@@ -708,23 +774,22 @@ if 'df' in locals() and 'smiles_column' in locals() and descriptor_types:
             try:
                 final_df.to_csv(output_path, index=False)
                 st.success(f"✅ 结果已保存到: {output_path}")
-                
+
                 # 显示文件大小
                 output_size = os.path.getsize(output_path) / (1024 * 1024)
                 st.info(f"📁 输出文件大小: {output_size:.2f} MB")
-                
+
+                with open(output_path, 'rb') as fh:
+                    st.download_button(
+                        label="📥 下载2D描述符CSV文件",
+                        data=fh,
+                        file_name=output_filename,
+                        mime="text/csv",
+                        help="下载包含2D描述符的完整CSV文件"
+                    )
+
             except Exception as e:
                 st.error(f"保存文件失败: {e}")
-            
-            # 提供下载
-            csv_data = final_df.to_csv(index=False)
-            st.download_button(
-                label="📥 下载2D描述符CSV文件",
-                data=csv_data,
-                file_name=output_filename,
-                mime="text/csv",
-                help="下载包含2D描述符的完整CSV文件"
-            )
             
             # 显示描述符统计
             st.subheader("描述符统计")

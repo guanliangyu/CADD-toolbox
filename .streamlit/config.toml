@@ -1,3 +1,5 @@
 [server]
 fileWatcherType = "none"
-enableStaticServing = false 
+enableStaticServing = false
+maxUploadSize = 40960
+headless = true

@@ -1,14 +1,12 @@
-"""
-分子库代表性子集选择系统 - 主页
-"""
-import os
-
+"""分子库代表性子集选择系统 - 主页"""
+from pathlib import Path
 import sys
 import streamlit as st
 
 # 添加项目根目录到路径，确保能导入utils模块
-script_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(script_dir)
+project_root = Path(__file__).resolve().parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 # 导入工具模块
 from utils.state_utils import initialize_session_state, display_state_sidebar
@@ -35,49 +33,38 @@ st.markdown("""
 
 本应用实现了从大型分子库中提取代表性子集的流程，主要功能包括：
 - 分子过滤和标准化
-- 2D指纹和理化性质计算
-- 3D构象生成和形状特征计算
-- 多种聚类算法支持
-- 子集代表性验证与评价
+- 2D/3D指纹与理化性质计算
+- 多样化聚类与代表性选择
+- 子集质量验证与可视化分析
 
-### 使用流程
+### 推荐使用流程
 
-1. **数据处理页面**：上传分子数据、配置参数并处理分子
-2. **聚类与选择页面**：对处理后的分子进行聚类并选择代表性分子
-3. **验证与下载页面**：验证选择的子集质量并下载结果
-4. **可视化分析页面**：对分子和子集进行可视化分析
-5. **批处理页面**：批量处理多个数据集
+1. **数据预处理**：上传数据并完成基本清洗与统计。
+2. **基础成药性筛选**：依据Lipinski等规则快速筛除不合格分子。
+3. **描述符生成**：在`生成2D描述符`、`生成3D构象`与`构象动力学优化`页面中构建分子特征，并通过`生成3D描述符`完成特征提取。
+4. **代表性筛选与评估**：在`化合物多样性筛选`页面挑选子集，并使用`2D结构多样性评估`与`3D结构多样性评估`检验覆盖度和分布。
 
-### 快速开始
-
-请点击左侧菜单中的"数据处理"开始使用系统，或者点击下方按钮直接进入相应页面：
+请使用下方快捷按钮或左侧菜单进入相应页面：
 """)
 
-# 创建按钮行
-col1, col2, col3 = st.columns(3)
+page_links = [
+    ("数据预处理", "pages/0_数据处理.py"),
+    ("基础成药性筛选", "pages/1_基础成药性筛选.py"),
+    ("生成2D描述符", "pages/2_生成2D描述符.py"),
+    ("生成3D构象", "pages/3-1_生成3D构象.py"),
+    ("构象动力学优化", "pages/3-2_构象动力学优化.py"),
+    ("生成3D描述符", "pages/3-3_生成3D描述符.py"),
+    ("化合物多样性筛选", "pages/4_化合物多样性筛选.py"),
+    ("2D结构多样性评估", "pages/5-1_2D结构多样性评估.py"),
+    ("3D结构多样性评估", "pages/5-2_3D结构多样性评估.py"),
+]
 
-with col1:
-    if st.button("数据处理", use_container_width=True):
-        st.switch_page("pages/1_数据处理.py")
-        
-with col2:
-    if st.button("聚类与选择", use_container_width=True):
-        st.switch_page("pages/2_聚类与选择.py")
-        
-with col3:
-    if st.button("验证与下载", use_container_width=True):
-        st.switch_page("pages/3_验证与下载.py")
-
-# 创建第二行按钮
-col4, col5, _ = st.columns(3)
-
-with col4:
-    if st.button("可视化分析", use_container_width=True):
-        st.switch_page("pages/4_可视化分析.py")
-        
-with col5:
-    if st.button("批处理", use_container_width=True):
-        st.switch_page("pages/5_批处理.py")
+for start in range(0, len(page_links), 3):
+    cols = st.columns(3)
+    for col, (label, target) in zip(cols, page_links[start : start + 3]):
+        with col:
+            if st.button(label, use_container_width=True):
+                st.switch_page(target)
 
 # 添加应用程序信息
 st.markdown("""
