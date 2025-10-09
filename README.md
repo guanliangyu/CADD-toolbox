@@ -290,16 +290,16 @@ streamlit run Home.py
 - **后台支持**：支持智能后台计算
 
 ##### 5. 化合物多样性筛选
-- **功能**：从分子库中选择代表性子集
-- **算法选择**：
-  - Butina 聚类（基于相似度阈值）
-  - K-means 聚类
-  - MaxMin 多样性选择
-- **参数调整**：
-  - 子集比例
-  - 相似度阈值
-  - 聚类数量
-- **结果验证**：覆盖度分析和质量评估
+- **功能**：自动生成 GPU 加速的多样性筛选脚本并批量运行
+- **工作流程**：
+  - 根据描述符 CSV 和筛选参数生成 `subset_select_*.py/.sh`
+  - 可选在后台执行脚本并实时查看日志、下载结果
+- **可调参数**：
+  - 子集大小（保留样本数）
+  - 距离度量（欧氏/曼哈顿/余弦）
+  - 首个分子策略（随机/质心/首行）
+  - GPU/FP16 开关（自动检测 GPU 可用性）
+- **结果验证**：界面内提供输出下载、日志查看和任务状态管理
 
 ##### 6-1. 2D结构多样性评估
 - **功能**：评估分子集合的2D结构多样性
@@ -384,7 +384,7 @@ python scripts/run_pipeline.py \
 
 ## ⚙️ 配置文件详解
 
-配置文件使用 YAML 格式，主要包括以下部分：
+命令行入口 `scripts/run_pipeline.py` 默认加载 `configs/default_config.yml`。可以复制该文件并按需修改。配置文件使用 YAML 格式，主要包括以下部分：
 
 ### 数据处理配置
 
@@ -392,20 +392,28 @@ python scripts/run_pipeline.py \
 data:
   filtering:
     enabled: true
-    max_mw: 1000         # 最大分子量
-    min_mw: 100          # 最小分子量
-    max_atoms: 100       # 最大原子数
-    remove_salts: true   # 移除盐分
-  
+    max_mw: 1000          # 最大分子量
+    min_mw: 100           # 最小分子量
+    max_atoms: 100        # 最大原子数
+    remove_salts: true    # 移除盐分
+    neutralize: true      # 中和电荷
+    standardize: true     # 分子标准化
+
   conformers:
-    enabled: true        # 生成3D构象
-    method: "ETKDG"      # 构象生成方法
-    num_confs: 10        # 构象数量
+    enabled: true         # 生成3D构象
+    method: "ETKDG"       # 构象生成方法
     force_field: "MMFF94" # 力场类型
-    
+    max_iters: 200        # 力场优化迭代
+    num_conf: 1           # 每个分子的构象数量
+
   charges:
-    enabled: true        # 计算电荷
-    method: "gasteiger"  # 电荷计算方法
+    enabled: true         # 计算电荷
+    method: "gasteiger"   # 电荷计算方法
+
+  batching:
+    enabled: true
+    batch_size: 10000     # 每批分子数
+    n_jobs: -1            # 并行进程数
 ```
 
 ### GPU 加速配置
@@ -422,7 +430,7 @@ gpu:
     kmeans: true         # GPU加速K-means
     pca: true            # GPU加速PCA
     distances: true      # GPU加速距离计算
-    umap: true           # GPU加速UMAP
+    transformers: true   # GPU分子表示学习/转换
 ```
 
 ### 特征计算配置
@@ -430,20 +438,28 @@ gpu:
 ```yaml
 features:
   fingerprints:
-    types: ["morgan", "maccs"]  # 指纹类型
-    morgan_radius: 2            # Morgan半径
-    morgan_bits: 1024           # Morgan位数
-    
+    types: ["morgan"]          # 支持 morgan/rdkit/maccs 等
+    morgan_radius: 2
+    morgan_bits: 1024
+
   shape:
-    enabled: true               # 3D形状特征
-    
+    enabled: true
+    descriptors: ["usr", "moments"]
+
+  electrostatics:
+    enabled: true
+    descriptors: ["charges_stats", "dipole"]
+
   properties:
-    enabled: true               # 理化性质
-    
+    enabled: true
+    descriptors: ["mw", "logp", "tpsa", "hba", "hbd", "rotatable_bonds"]
+
   dimensionality_reduction:
-    enabled: true               # 降维
-    method: "pca"               # 降维方法
-    n_components: 50            # 组件数量
+    enabled: true
+    method: "pca"
+    n_components: 50
+    scaler: "standard"
+    variance_ratio: 0.95
 ```
 
 ### 聚类配置
@@ -456,10 +472,11 @@ clustering:
     cutoff: 0.4          # 相似度阈值
     
   kmeans:
-    n_clusters: 10000    # 簇数量
+    n_clusters: 100000   # 簇数量
     
   maxmin:
     init_method: "random" # 初始化方法
+    distance_measure: "combo"
 ```
 
 ## 📊 结果文件说明
@@ -509,20 +526,20 @@ results/
 ```yaml
 # 大数据集配置示例
 data:
-  batch_processing:
+  batching:
     enabled: true
     batch_size: 10000
-    
+
 gpu:
-  batch_size: 5000      # 根据显存调整
-  
+  batch_size: 5000       # 根据显存调整
+
 features:
   fingerprints:
-    types: ["morgan"]   # 先使用单一指纹类型
-  
+    types: ["morgan"]    # 先使用单一指纹类型
+
 clustering:
-  method: "butina"      # Butina 通常比 K-means 更快
-  cutoff: 0.6           # 较高阈值减少计算量
+  method: "butina"       # Butina 通常比 K-means 更快
+  cutoff: 0.6            # 较高阈值减少计算量
 ```
 
 ### 大数据集处理建议
@@ -546,12 +563,14 @@ CADD-toolbox/
 │   ├── 3-2_构象动力学优化.py
 │   ├── 3-3_生成3D描述符.py
 │   ├── 4_化合物多样性筛选.py
-│   └── 5-1_2D结构多样性评估.py
+│   ├── 5-1_2D结构多样性评估.py
+│   └── 5-2_3D结构多样性评估.py
 ├── utils/                     # 核心工具模块
 │   ├── molecular_utils.py     # 分子处理
 │   ├── clustering_utils.py    # 聚类算法
 │   ├── feature_utils.py       # 特征计算
-│   ├── gpu_utils.py          # GPU加速
+│   ├── gpu_utils.py           # GPU加速
+│   ├── descriptor_generation.py # 2D描述符/指纹生成
 │   ├── background_*.py       # 后台任务管理
 │   └── validation_utils.py   # 结果验证
 ├── configs/                   # 配置文件
@@ -664,4 +683,4 @@ python -c "import cudf; print('GPU available')"
 
 **提示**：安装过程可能需要 15-30 分钟，请耐心等待。建议先使用小数据集熟悉工具功能，然后再处理大型数据集。
 
-**CADD-Toolbox** - 让药物设计更简单、更高效！ 
+**CADD-Toolbox** - 让药物设计更简单、更高效！
