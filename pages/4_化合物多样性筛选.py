@@ -13,6 +13,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+try:
+    import torch  # type: ignore
+    TORCH_AVAILABLE = True
+    CUDA_AVAILABLE = torch.cuda.is_available()
+except ImportError:
+    torch = None  # type: ignore
+    TORCH_AVAILABLE = False
+    CUDA_AVAILABLE = False
+
 # ────────────────────────────────────────────────────────────────────────────────
 # 基础设置 & 工具函数
 # ────────────────────────────────────────────────────────────────────────────────
@@ -20,13 +29,22 @@ st.set_page_config(page_title="多样性筛选 GPU版 (脚本模式)", layout="w
 st.title("🚀 多样性筛选 GPU高性能版 — 脚本生成 & 后台执行")
 
 DATA_DIR = os.path.abspath("data")
+
+
 def list_data_folders():
-    return [f for f in os.listdir(DATA_DIR)
-            if os.path.isdir(os.path.join(DATA_DIR, f))] if os.path.exists(DATA_DIR) else []
+    if not os.path.exists(DATA_DIR):
+        return []
+    return sorted(
+        f for f in os.listdir(DATA_DIR)
+        if os.path.isdir(os.path.join(DATA_DIR, f))
+    )
+
 
 def list_csv(folder):
-    p = os.path.join(DATA_DIR, folder)
-    return [f for f in os.listdir(p) if f.endswith(".csv")] if os.path.exists(p) else []
+    folder_path = os.path.join(DATA_DIR, folder)
+    if not os.path.exists(folder_path):
+        return []
+    return sorted(f for f in os.listdir(folder_path) if f.endswith(".csv"))
 
 def file_info(fp):
     s = os.path.getsize(fp)/1024/1024
@@ -545,16 +563,59 @@ st.info(f"📄 大小: {size_mb:.1f} MB   🕒 修改: {mtime}")
 
 # ──  筛选参数
 st.subheader("2. 筛选参数")
+
+if not TORCH_AVAILABLE:
+    st.warning("未检测到 PyTorch，脚本将默认使用 CPU 路径。若需 GPU 加速，请先安装带 CUDA 的 PyTorch。")
+elif not CUDA_AVAILABLE:
+    st.info("当前环境未检测到可用 GPU，将以 CPU 模式生成脚本。")
+
+st.markdown(
+    """
+    - **子集大小**：输出集合的目标分子数量；可从几百开始试验，再按需要增大。
+    - **距离度量**：欧氏/曼哈顿适合已归一化的连续特征，余弦距离对高维指纹更稳健。
+    - **首个分子策略**：`random` 平衡探索，`centroid` 更强调与中心差异，`first` 用首行保证可重复。
+    - **GPU / FP16**：勾选 GPU 以启用贪心加速；FP16 适用于大规模指纹且显存在 8GB 以上时进一步降内存。
+    """
+)
+
 col1, col2, col3 = st.columns(3)
 with col1:
-    subset_size = st.number_input("子集大小", min_value=1, value=1000, step=100)
-    metric = st.selectbox("距离度量", ["euclidean", "manhattan", "cosine"])
+    subset_size = st.number_input(
+        "子集大小",
+        min_value=1,
+        value=1000,
+        step=100,
+        help="选择最终需要保留的分子数，建议结合下游实验批量设置。"
+    )
+    metric = st.selectbox(
+        "距离度量",
+        ["euclidean", "manhattan", "cosine"],
+        help="依据描述符特性选择距离度量；对指纹推荐余弦。"
+    )
 with col2:
-    algo = st.selectbox("筛选算法", ["greedy"])  # sphere_exclusion GPU 版暂不放出
-    initial = st.selectbox("首个分子策略", ["random", "centroid", "first"])
+    algo = st.selectbox(
+        "筛选算法",
+        ["greedy"],
+        help="当前提供基于最大最小距离的贪心算法，兼顾速度与覆盖度。"
+    )
+    initial = st.selectbox(
+        "首个分子策略",
+        ["random", "centroid", "first"],
+        help="决定贪心首个样本的选取方式，从而影响后续覆盖范围。"
+    )
 with col3:
-    use_gpu = st.checkbox("使用 GPU", value=True)
-    fp16    = st.checkbox("启用 FP16", value=False, disabled=not use_gpu)
+    use_gpu = st.checkbox(
+        "使用 GPU",
+        value=CUDA_AVAILABLE,
+        disabled=not CUDA_AVAILABLE,
+        help="检测到可用 GPU 时可启用高速计算；若未安装 GPU 环境则自动关闭。"
+    )
+    fp16 = st.checkbox(
+        "启用 FP16",
+        value=False,
+        disabled=not (use_gpu and CUDA_AVAILABLE),
+        help="在 GPU 模式下降低显存占用，建议在精度允许时开启。"
+    )
 
 # ──  输出文件名
 st.subheader("3. 输出设置")
