@@ -17,6 +17,8 @@ import subprocess
 import signal
 import sys
 
+from utils.background_conformer_generator import run_background_conformer_generation
+
 # 简化的后台运行功能，现在不依赖外部工具
 BACKGROUND_CONFORMER_AVAILABLE = True
 
@@ -286,20 +288,16 @@ def smart_file_scan(file_to_scan, current_filename, smiles_column):
                 file_to_scan.seek(0)
             
             if smiles_column in df_preview.columns:
-                st.dataframe(df_preview, height=200)
-                st.caption(f"显示前 {len(df_preview)} 行的预览")
                 scan_successful = True
                 
-                # 对于大CSV文件，延迟计算总行数
                 if file_size > LARGE_FILE_THRESHOLD:
-                    total_mols = -1  # 延迟计算
+                    total_mols = -1
                     st.info("⚡ 大文件检测：总行数将在处理时计算以提高响应速度")
                 else:
-                    # 小文件直接计算
                     if isinstance(file_to_scan, str):
-                        total_mols = sum(1 for _ in open(file_to_scan, 'r')) - 1  # 减去标题行
+                        total_mols = sum(1 for _ in open(file_to_scan, 'r')) - 1
                     else:
-                        total_mols = -1  # UploadedFile延迟计算
+                        total_mols = -1
             else:
                 st.error(f"在CSV中未找到SMILES列 '{smiles_column}'")
         except Exception as e:
@@ -366,9 +364,6 @@ def smart_file_scan(file_to_scan, current_filename, smiles_column):
             if hasattr(file_to_scan, 'seek'):
                 file_to_scan.seek(0)
         
-        if scan_successful and preview_data:
-            st.text_area("SMILES预览:", "\n".join(preview_data), height=150)
-    
     elif file_ext == "sdf":
         if isinstance(file_to_scan, str):
             if file_size > HUGE_FILE_THRESHOLD:
@@ -441,15 +436,111 @@ def smart_file_scan(file_to_scan, current_filename, smiles_column):
             if hasattr(file_to_scan, 'seek'):
                 file_to_scan.seek(0)
         
-        if scan_successful and preview_data:
-            st.text_area("SDF中的SMILES预览:", "\n".join(preview_data), height=150)
-            
-            if is_estimated:
-                st.warning(f"📊 估算约 {total_mols:,} 个分子（基于文件采样）")
-            else:
-                st.info(f"在SDF文件中找到 {total_mols:,} 个分子")
+        if scan_successful and is_estimated:
+            st.warning(f"📊 估算约 {total_mols:,} 个分子（基于文件采样）")
+        elif scan_successful:
+            st.info(f"在SDF文件中找到 {total_mols:,} 个分子")
     
     return total_mols, preview_data, df_preview, scan_successful, is_estimated
+
+
+def render_file_preview_section(input_ready, input_method, uploaded_file, selected_file_path,
+                                current_filename, smiles_column):
+    """渲染数据预览区域，并返回扫描的关键信息"""
+    total_mols = 0
+    scan_successful = False
+    is_estimated = False
+    df_preview = None
+    preview_data = []
+
+    if not input_ready:
+        if input_method == "上传新文件":
+            st.info("👆 请先上传并保存文件到工作目录。")
+        else:
+            st.info("👆 请先从工作目录中选择需要处理的文件。")
+        return total_mols, scan_successful, is_estimated
+
+    file_to_scan = uploaded_file if uploaded_file else selected_file_path
+    cache_valid = is_cache_valid(file_to_scan)
+
+    st.markdown(f"**当前文件:** `{current_filename}`")
+
+    if cache_valid:
+        st.success("✅ 使用缓存的扫描结果 (文件未变更)")
+        total_mols = st.session_state.total_potential_mols_cache
+        preview_data = st.session_state.preview_data_cache
+        df_preview = st.session_state.df_preview_cache
+        scan_successful = st.session_state.initial_scan_successful_cache
+        is_estimated = getattr(st.session_state, 'is_estimated_cache', False)
+
+        if df_preview is not None:
+            st.dataframe(df_preview, height=200)
+            st.caption(f"显示前 {len(df_preview)} 行的预览")
+        elif preview_data:
+            file_ext = current_filename.lower().split('.')[-1]
+            label = "SDF中的SMILES预览:" if file_ext == "sdf" else "SMILES预览:"
+            st.text_area(label, "\n".join(preview_data), height=150)
+
+        if st.session_state.file_size_cache:
+            size_mb = st.session_state.file_size_cache / (1024 * 1024)
+            if size_mb < 1:
+                st.info(f"文件大小: {st.session_state.file_size_cache/1024:.1f} KB")
+            else:
+                st.info(f"文件大小: {size_mb:.1f} MB")
+    else:
+        try:
+            with st.spinner(f"正在智能扫描文件 '{current_filename}'..."):
+                total_mols, preview_data, df_preview, scan_successful, is_estimated = smart_file_scan(
+                    file_to_scan, current_filename, smiles_column
+                )
+
+            if scan_successful:
+                current_hash = get_file_hash(file_to_scan)
+                current_identifier = file_to_scan if isinstance(file_to_scan, str) else getattr(
+                    file_to_scan, 'name', str(file_to_scan)
+                )
+
+                st.session_state.total_potential_mols_cache = total_mols
+                st.session_state.preview_data_cache = preview_data
+                st.session_state.df_preview_cache = df_preview
+                st.session_state.initial_scan_successful_cache = True
+                st.session_state.scan_results_valid = True
+                st.session_state.is_estimated_cache = is_estimated
+                st.session_state.file_hash_cache = current_hash
+                st.session_state.last_processed_file_identifier = current_identifier
+                st.session_state.scan_timestamp_cache = time.time()
+            else:
+                st.session_state.scan_results_valid = False
+        except Exception as e:
+            st.error(f"扫描文件时出错: {e}")
+            st.session_state.scan_results_valid = False
+            scan_successful = False
+            is_estimated = False
+
+        if scan_successful:
+            file_ext = current_filename.lower().split('.')[-1]
+            if df_preview is not None:
+                st.dataframe(df_preview, height=200)
+                st.caption(f"显示前 {len(df_preview)} 行的预览")
+            elif preview_data:
+                label = "SDF中的SMILES预览:" if file_ext == "sdf" else "SMILES预览:"
+                st.text_area(label, "\n".join(preview_data), height=150)
+
+    if scan_successful:
+        file_ext = current_filename.lower().split('.')[-1]
+        if total_mols == -1:
+            st.info("CSV文件预览完成。开始生成时将计算总条目数。")
+        elif is_estimated:
+            st.success(f"智能扫描完成: 估算约 {total_mols:,} 个条目")
+        elif file_ext != "sdf":
+            st.success(f"扫描完成: 在 '{current_filename}' 中找到 {total_mols:,} 个条目")
+    else:
+        if input_method == "上传新文件":
+            st.info("👆 请确保文件已上传并保存到工作目录。")
+        else:
+            st.info("👆 请确认目标文件可访问。")
+
+    return total_mols, scan_successful, is_estimated
 
 def create_simple_run_script(work_dir, script_name):
     """创建简单的后台运行脚本"""
@@ -602,11 +693,12 @@ def simple_check_background_status(work_dir, script_name):
     return {'status': 'unknown'}
 
 def generate_conformer_script(input_file, output_file, num_conformers, max_attempts, random_seed, num_workers, processing_limit, file_type, smiles_column="SMILES"):
-    """生成独立的构象生成脚本"""
+    """生成独立的构象生成脚本，并写入输出目录"""
     # 使用相对路径的文件名，因为脚本会在工作目录中运行
     input_filename = os.path.basename(input_file)
     output_filename = os.path.basename(output_file)
     log_filename = output_filename.replace('.sdf', '.log')
+    output_dir = os.path.dirname(output_file)
     
     # 转换变量为字符串
     num_conformers_str = str(num_conformers)
@@ -1091,7 +1183,15 @@ if __name__ == "__main__":
     main()
 '''
     
-    return script_content
+    # 写入脚本文件
+    os.makedirs(output_dir, exist_ok=True)
+    script_name = "conformer_generation"
+    script_path = os.path.join(output_dir, f"{script_name}.py")
+    with open(script_path, 'w', encoding='utf-8') as f:
+        f.write(script_content)
+    os.chmod(script_path, 0o755)
+
+    return script_path, script_name, script_content
 
 st.set_page_config(page_title="3D构象生成", layout="wide")
 st.title("🧬 3D构象生成")
@@ -1136,10 +1236,11 @@ if st.session_state.scan_results_valid:
                 st.rerun()
 
 # 文件输入方式选择
-st.subheader("1. 选择输入方式")
+st.subheader("步骤一 · 选择输入数据")
+st.markdown("选择或上传一个包含SMILES/SDF的文件，系统会在下方提供快速预览与缓存提示。")
 
 input_method = st.radio(
-    "选择输入方式:",
+    "选择输入方式",
     ("上传新文件", "使用已保存文件"),
     horizontal=True
 )
@@ -1153,7 +1254,8 @@ if input_method == "上传新文件":
     uploaded_file = st.file_uploader(
         "上传SMILES文件(CSV、TXT、SMI)或SDF文件",
         type=["csv", "txt", "smi", "sdf"],
-        help="最大文件大小约4GB。支持百万级分子库的高效处理。"
+        help="最大文件大小约4GB。支持百万级分子库的高效处理。",
+        key="conformer_upload"
     )
     
     if uploaded_file:
@@ -1178,7 +1280,6 @@ if input_method == "上传新文件":
             if st.button("保存文件到工作目录"):
                 file_path, work_dir_new = save_uploaded_file(uploaded_file)
                 if file_path:
-                    # 保存到session state
                     st.session_state.saved_file_path = file_path
                     st.session_state.saved_work_dir = work_dir_new
                     st.session_state.scan_results_valid = False 
@@ -1187,8 +1288,19 @@ if input_method == "上传新文件":
             else:
                 st.warning("文件已上传但尚未保存到工作目录。点击上方按钮保存文件。")
 
+    elif st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path):
+        selected_file_path = st.session_state.saved_file_path
+        work_dir = st.session_state.saved_work_dir
+        current_filename = os.path.basename(selected_file_path)
+        st.success(f"使用已保存的文件: {selected_file_path}")
+    elif st.session_state.saved_file_path:
+        st.warning("之前保存的文件已不存在，请重新上传。")
+        st.session_state.saved_file_path = None
+        st.session_state.saved_work_dir = None
+        st.session_state.scan_results_valid = False
+
 else:  # 使用已保存文件
-    st.subheader("选择已保存的文件")
+    st.markdown("**从工作目录中选择文件**")
     
     available_folders = list_data_folders()
     if not available_folders:
@@ -1230,8 +1342,21 @@ smiles_column = "SMILES"
 if current_filename and current_filename.lower().endswith(".csv"):
     smiles_column = st.text_input("输入包含SMILES的列名:", "SMILES")
 
+input_ready = (uploaded_file is not None) or (selected_file_path is not None and os.path.exists(selected_file_path or ""))
+
+with st.container():
+    st.markdown("###### 数据预览与缓存")
+    total_mols, scan_successful, is_estimated = render_file_preview_section(
+        input_ready,
+        input_method,
+        uploaded_file,
+        selected_file_path,
+        current_filename,
+        smiles_column
+    )
+
 # 构象生成设置
-st.subheader("2. 构象生成设置")
+st.subheader("步骤二 · 配置生成参数")
 col1, col2, col3 = st.columns(3)
 with col1:
     num_conformers = st.number_input("每个分子的构象数:", min_value=1, max_value=100, value=10)
@@ -1241,551 +1366,113 @@ with col3:
     random_seed = st.number_input("随机种子:", min_value=-1, value=42, help="-1表示不指定种子")
 
 # 执行模式设置
-st.subheader("3. 执行模式设置")
+st.subheader("步骤三 · 选择执行模式")
+st.markdown("根据任务规模选择执行方式。后台模式支持断点恢复并提供脚本工具，前台模式适合小规模快速验证。")
 
 if BACKGROUND_CONFORMER_AVAILABLE:
     execution_mode = st.radio(
-        "选择执行模式:",
+        "执行方式",
         ("智能后台执行 (推荐)", "Streamlit内并行执行"),
         index=0,
         help="智能后台执行具有断点恢复功能，不受页面刷新影响；并行执行：在Streamlit内执行，适合小规模测试"
     )
 else:
     execution_mode = st.radio(
-        "选择执行模式:",
+        "执行方式",
         ("Streamlit内并行执行",),
         index=0,
         help="Streamlit内并行执行：在Streamlit内执行，适合小规模测试"
     )
 
-# 并行处理设置
-st.subheader("4. 并行处理设置")
+st.markdown("###### 并行度配置")
 if execution_mode == "智能后台执行 (推荐)":
-    # 针对SLURM集群优化：支持更大的进程数
-    max_workers_cluster = 256  # 支持多节点：2节点×128核心
-    default_workers = min(64, multiprocessing.cpu_count() * 2)  # 本地测试用较小值
-    
+    max_workers_cluster = 256
+    default_workers = min(64, multiprocessing.cpu_count() * 2)
+
     num_workers = st.number_input(
-        "工作进程数:",
+        "工作进程数",
         min_value=1,
         max_value=max_workers_cluster,
         value=default_workers,
-        help="用于并行处理分子的进程数（本地推荐：64，SLURM集群可用：最高256进程）"
+        help="用于并行处理分子的进程数（本地推荐≤64，集群模式可扩展至256）"
     )
-    
-    # 显示建议
+
     if num_workers > 128:
-        st.info("💡 **集群建议**: >128进程需要多节点，建议在SLURM脚本中设置多节点配置")
+        st.info("💡 **集群建议**: >128 进程通常需要多节点，请在 SLURM 脚本中配置节点信息。")
     elif num_workers > 64:
-        st.info("💡 **集群建议**: >64进程建议在SLURM集群上运行以获得最佳性能")
-    
-    st.info("🤖 **智能模式**: 支持断点恢复，页面刷新不会影响进度，推荐大规模分子库使用")
+        st.info("💡 **集群建议**: >64 进程建议在 SLURM 集群上执行以获得最佳性能。")
+
+    st.info("🤖 智能后台模式支持断点恢复，页面刷新不会影响任务进度。")
 else:
     num_threads = st.number_input(
-        "工作线程数:",
+        "工作线程数",
         min_value=1,
-        max_value=min(128, multiprocessing.cpu_count() * 4),  # 线程池可以设置更高
+        max_value=min(128, multiprocessing.cpu_count() * 4),
         value=min(36, multiprocessing.cpu_count() * 2),
-        help="用于并行处理分子的线程数（前台执行建议不超过128）"
+        help="用于并行处理分子的线程数（建议不超过128，以免阻塞 UI）"
     )
 
-# 处理范围设置
-st.subheader("5. 处理范围")
+st.markdown("###### 处理范围")
 processing_options = ["处理所有分子", "仅处理前500个分子", "仅处理前10000个分子", "仅处理前100000个分子"]
-selected_scope = st.radio("选择处理范围:", options=processing_options, index=0)
+selected_scope = st.radio("选择处理范围", options=processing_options, index=0, horizontal=True)
 
-# 文件处理和预览
-input_ready = (uploaded_file is not None) or (selected_file_path is not None and os.path.exists(selected_file_path))
+limit_map = {
+    processing_options[0]: float('inf'),
+    processing_options[1]: 500,
+    processing_options[2]: 10000,
+    processing_options[3]: 100000
+}
+processing_limit = limit_map[selected_scope]
 
-if input_ready:
-    st.header("文件预览和生成控制")
-    st.markdown(f"**当前文件:** `{current_filename}`")
-
-    # 使用改进的缓存机制
-    file_to_scan = uploaded_file if uploaded_file else selected_file_path
-    cache_valid = is_cache_valid(file_to_scan)
-    
-    if cache_valid:
-        st.success("✅ 使用缓存的扫描结果 (文件未变更)")
-        total_mols = st.session_state.total_potential_mols_cache
-        preview_data = st.session_state.preview_data_cache
-        df_preview = st.session_state.df_preview_cache
-        scan_successful = st.session_state.initial_scan_successful_cache
-        is_estimated = getattr(st.session_state, 'is_estimated_cache', False)
-
-        # 显示缓存的预览
-        if df_preview is not None:
-            st.dataframe(df_preview, height=200)
-            st.caption(f"显示前 {len(df_preview)} 行的预览")
-        elif preview_data:
-            file_ext = current_filename.lower().split('.')[-1]
-            if file_ext == "sdf":
-                st.text_area("SDF中的SMILES预览:", "\n".join(preview_data), height=150)
-            else:
-                st.text_area("SMILES预览:", "\n".join(preview_data), height=150)
-        
-        # 显示文件大小
-        if st.session_state.file_size_cache:
-            size_mb = st.session_state.file_size_cache / (1024 * 1024)
-            if size_mb < 1:
-                st.info(f"文件大小: {st.session_state.file_size_cache/1024:.1f} KB")
-            else:
-                st.info(f"文件大小: {size_mb:.1f} MB")
-
-    else:  # 执行新的智能扫描
-        try:
-            with st.spinner(f"正在智能扫描文件 '{current_filename}'..."):
-                total_mols, preview_data, df_preview, scan_successful, is_estimated = smart_file_scan(
-                    file_to_scan, current_filename, smiles_column
-                )
-
-            # 更新缓存，包括新的哈希值
-            if scan_successful:
-                current_hash = get_file_hash(file_to_scan)
-                current_identifier = file_to_scan if isinstance(file_to_scan, str) else getattr(file_to_scan, 'name', str(file_to_scan))
-                
-                st.session_state.total_potential_mols_cache = total_mols
-                st.session_state.preview_data_cache = preview_data
-                st.session_state.df_preview_cache = df_preview
-                st.session_state.initial_scan_successful_cache = True
-                st.session_state.scan_results_valid = True
-                st.session_state.is_estimated_cache = is_estimated
-                st.session_state.file_hash_cache = current_hash
-                st.session_state.last_processed_file_identifier = current_identifier
-                st.session_state.scan_timestamp_cache = time.time()
-            else:
-                st.session_state.scan_results_valid = False
-
-        except Exception as e:
-            st.error(f"扫描文件时出错: {e}")
-            st.session_state.scan_results_valid = False
-            scan_successful = False
-            is_estimated = False
-
-    # 显示扫描状态
-    if scan_successful:
-        file_ext = current_filename.lower().split('.')[-1]
-        if total_mols == -1:
-            st.info("CSV文件预览完成。开始生成时将计算总条目数。")
-        elif is_estimated:
-            st.success(f"智能扫描完成: 估算约 {total_mols:,} 个条目")
-        elif file_ext != "sdf":
-            st.success(f"扫描完成: 在 '{current_filename}' 中找到 {total_mols:,} 个条目")
-
-    # 生成按钮和处理逻辑
-    if scan_successful and (total_mols > 0 or total_mols == -1):
-        st.markdown("---")
-        
-        # 确定处理限制
-        limit_map = {
-            processing_options[0]: float('inf'),  # 处理所有
-            processing_options[1]: 500,
-            processing_options[2]: 10000,
-            processing_options[3]: 100000
-        }
-        processing_limit = limit_map[selected_scope]
-        
-        # 确定按钮标签
-        if total_mols == -1:
-            if processing_limit == float('inf'):
-                mol_count_label = "CSV中的所有分子"
-            else:
-                mol_count_label = f"前{int(processing_limit)}个(如果CSV中有足够数据)"
-        else:
-            if processing_limit == float('inf'):
-                mol_count_label = f"{total_mols:,}"
-            else:
-                actual_count = min(total_mols, int(processing_limit))
-                mol_count_label = f"{actual_count:,}"
-
-        # 显示范围信息
-        if processing_limit != float('inf'):
-            if total_mols > processing_limit:
-                st.info(f"范围选择: 将处理 {total_mols:,} 个条目中的前{int(processing_limit):,}个")
-            elif total_mols == -1:
-                st.info(f"范围选择: 将尝试处理CSV中的前{int(processing_limit):,}个条目")
-        
-        # 大文件处理建议
-        if st.session_state.file_size_cache and st.session_state.file_size_cache > LARGE_FILE_THRESHOLD:
-            st.warning("⚡ **大文件建议**: 对于百万级分子库，建议选择较小的处理范围以获得更好的性能")
-
-        # 确定按钮标签和处理器数量
-        if execution_mode == "智能后台执行 (推荐)":
-            button_label = f"🚀 启动智能后台构象生成 {mol_count_label} 个分子 × {num_conformers} 构象 (支持断点恢复)"
-            processor_count = num_workers
-        else:
-            button_label = f"为 {mol_count_label} 个分子生成 {num_conformers} 个构象 (前台: {num_threads} 线程)"
-            processor_count = num_threads
-        
-        if st.button(button_label):
-            if execution_mode == "智能后台执行 (推荐)":
-                # 简化的智能后台执行模式
-                st.subheader("6. 智能后台处理")
-                
-                try:
-                    # 确定工作目录
-                    if selected_file_path and os.path.exists(selected_file_path):
-                        work_dir = os.path.dirname(selected_file_path)
-                    else:
-                        st.error("❌ 未找到有效的输入文件路径")
-                        st.stop()
-                    
-                    # 检查是否存在 conformer_generation.py
-                    conformer_script_path = os.path.join(work_dir, "conformer_generation.py")
-                    if not os.path.exists(conformer_script_path):
-                        st.error("❌ 未找到 conformer_generation.py 脚本")
-                        st.info("💡 请先点击 '📝 生成构象脚本' 按钮生成脚本文件")
-                        st.stop()
-                    
-                    st.info("🚀 准备启动简化的智能后台构象生成...")
-                    st.info(f"📂 工作目录: {work_dir}")
-                    st.info(f"📄 使用脚本: conformer_generation.py")
-                    
-                    # 启动简单的后台运行
-                    run_script_path, run_script_name = simple_run_background_conformer(work_dir)
-                    
-                    st.success(f"✅ 智能后台构象生成已启动！")
-                    st.info(f"📄 运行脚本: {run_script_path}")
-                    st.info(f"🏷️ 任务名称: {run_script_name}")
-                    
-                    # 保存任务信息到session state
-                    task_info = {
-                        'script_name': run_script_name,
-                        'script_file': run_script_path,
-                        'work_dir': work_dir,
-                        'start_time': time.time(),
-                        'input_file': selected_file_path,
-                        'config': {
-                            'num_workers': num_workers,
-                            'num_conformers': num_conformers,
-                            'max_attempts': max_attempts,
-                            'processing_limit': processing_limit,
-                            'file_type': current_filename.lower().split('.')[-1],
-                            'smiles_column': smiles_column
-                        }
-                    }
-                    st.session_state.simple_background_tasks.append(task_info)
-                    
-                    st.success("🎉 任务已添加到后台任务列表，可以安全关闭页面或刷新！")
-                    
-                    # 提供监控命令
-                    log_file = os.path.join(work_dir, f"{run_script_name}.log")
-                    st.code(f"# 监控命令\ntail -f {log_file}", language="bash")
-                    
-                    # 提供停止命令
-                    st.code(f"# 停止命令\npkill -f {run_script_name}", language="bash")
-                    
-                except Exception as e:
-                    st.error(f"❌ 启动智能后台构象生成失败: {e}")
-                    st.code(str(e), language="text")
-                    
-            else:
-                # 前台执行模式（原有逻辑）
-                st.subheader("6. 前台处理")
-                st.info("🔄 在Streamlit内进行并行构象生成")
-                
-                # 解析和加载分子
-                input_mols = []
-                source_ids = []
-                limit = int(processing_limit) if processing_limit != float('inf') else float('inf')
-
-                with st.spinner(f"正在从 '{current_filename}' 加载和解析分子..."):
-                    try:
-                        current_file = uploaded_file if uploaded_file else selected_file_path
-                        if hasattr(current_file, 'seek'):
-                            current_file.seek(0)
-                        
-                        file_ext = current_filename.lower().split('.')[-1]
-
-                        if file_ext == "csv":
-                            # 使用分块读取处理大CSV文件
-                            if st.session_state.file_size_cache > LARGE_FILE_THRESHOLD:
-                                st.info("⚡ 使用分块读取模式处理大CSV文件...")
-                                chunk_size = 10000
-                                total_processed = 0
-                                
-                                for chunk in pd.read_csv(current_file, chunksize=chunk_size):
-                                    if smiles_column in chunk.columns:
-                                        for idx, row in chunk.iterrows():
-                                            if len(input_mols) >= limit:
-                                                break
-                                            smi = str(row[smiles_column])
-                                            mol = Chem.MolFromSmiles(smi)
-                                            if mol:
-                                                input_mols.append(mol)
-                                                source_ids.append(f"行 {total_processed + idx + 1}: {smi}")
-                                        total_processed += len(chunk)
-                                        if len(input_mols) >= limit:
-                                            break
-                                        if total_processed % 50000 == 0:
-                                            # 使用状态占位符而不是频繁输出
-                                            if not hasattr(st.session_state, 'parse_status_placeholder'):
-                                                st.session_state.parse_status_placeholder = st.empty()
-                                            st.session_state.parse_status_placeholder.info(f"🔄 解析进度: {total_processed:,} 行，{len(input_mols):,} 个有效分子")
-                            else:
-                                df_full = pd.read_csv(current_file)
-                                csv_row_count = len(df_full)
-                                st.info(f"CSV完全读取完成。包含 {csv_row_count:,} 行数据。开始解析...")
-
-                                if smiles_column in df_full.columns:
-                                    for idx, row in df_full.iterrows():
-                                        if len(input_mols) >= limit:
-                                            break
-                                        smi = str(row[smiles_column])
-                                        mol = Chem.MolFromSmiles(smi)
-                                        if mol:
-                                            input_mols.append(mol)
-                                            source_ids.append(f"行 {idx+1}: {smi}")
-                                else:
-                                    st.error(f"SMILES列 '{smiles_column}' 不存在，请重新检查。")
-                                    st.stop()
-
-                        elif file_ext in ["txt", "smi"]:
-                            if isinstance(current_file, str):
-                                with open(current_file, "r", encoding="utf-8") as f:
-                                    for i, line in enumerate(f):
-                                        if len(input_mols) >= limit:
-                                            break
-                                        smi = line.strip()
-                                        if smi:
-                                            mol = Chem.MolFromSmiles(smi)
-                                            if mol:
-                                                input_mols.append(mol)
-                                                source_ids.append(f"行 {i+1}: {smi}")
-                                        
-                                        # 进度更新（仅对大文件）
-                                        if st.session_state.file_size_cache > LARGE_FILE_THRESHOLD and i % 10000 == 0 and i > 0:
-                                            if not hasattr(st.session_state, 'parse_status_placeholder'):
-                                                st.session_state.parse_status_placeholder = st.empty()
-                                            st.session_state.parse_status_placeholder.info(f"🔄 解析进度: {i:,} 行，{len(input_mols):,} 个有效分子")
-                            else:
-                                with io.TextIOWrapper(current_file, encoding="utf-8") as text_reader:
-                                    for i, line in enumerate(text_reader):
-                                        if len(input_mols) >= limit:
-                                            break
-                                        smi = line.strip()
-                                        if smi:
-                                            mol = Chem.MolFromSmiles(smi)
-                                            if mol:
-                                                input_mols.append(mol)
-                                                source_ids.append(f"行 {i+1}: {smi}")
-
-                        elif file_ext == "sdf":
-                            if isinstance(current_file, str):
-                                supplier = Chem.ForwardSDMolSupplier(current_file, removeHs=False, sanitize=True)
-                            else:
-                                sdf_stream = io.BytesIO(current_file.getvalue())
-                                supplier = Chem.ForwardSDMolSupplier(sdf_stream, removeHs=False, sanitize=True)
-                            
-                            for i, mol in enumerate(supplier):
-                                if len(input_mols) >= limit:
-                                    break
-                                if mol is not None:
-                                    input_mols.append(mol)
-                                    source_ids.append(f"SDF分子 {i+1} ({Chem.MolToSmiles(mol)})")
-                                
-                                # 进度更新（仅对大文件）
-                                if st.session_state.file_size_cache > LARGE_FILE_THRESHOLD and i % 1000 == 0 and i > 0:
-                                    if not hasattr(st.session_state, 'parse_status_placeholder'):
-                                        st.session_state.parse_status_placeholder = st.empty()
-                                    st.session_state.parse_status_placeholder.info(f"🔄 解析进度: {i:,} 个SDF条目，{len(input_mols):,} 个有效分子")
-                        
-                        if not input_mols:
-                            st.warning("基于当前范围，没有解析到有效分子用于生成。")
-                            st.stop()
-                            
-                    except Exception as e:
-                        st.error(f"完整解析 '{current_filename}' 时出错: {e}")
-                        st.stop()
-                    
-                # 构象生成处理
-                if input_mols:
-                    st.info(f"🚀 开始为 {len(input_mols):,} 个分子生成构象...")
-                    
-                    # 创建进度条和状态显示区域
-                    progress_container = st.container()
-                    with progress_container:
-                        progress_bar = st.progress(0.0)
-                        status_text = st.empty()
-                        stats_col1, stats_col2, stats_col3 = st.columns(3)
-                        with stats_col1:
-                            completed_metric = st.empty()
-                        with stats_col2:
-                            success_metric = st.empty()
-                        with stats_col3:
-                            speed_metric = st.empty()
-                    
-                    processed_mols = []
-                    success_count = 0
-                    errors = []
-                    
-                    tasks = [(mol, num_conformers, max_attempts, random_seed) for mol in input_mols]
-
-                    completed = 0
-                    start_time = time.time()
-                    last_update_time = start_time
-                    
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=processor_count) as executor:
-                        future_to_idx = {executor.submit(generate_conformers_for_mol, *task): i
-                                       for i, task in enumerate(tasks)}
-                        
-                        for future in concurrent.futures.as_completed(future_to_idx):
-                            idx = future_to_idx[future]
-                            identifier = source_ids[idx]
-                            
-                            try:
-                                result = future.result()
-                                if result['success'] and result['mol']:
-                                    processed_mols.append(result['mol'])
-                                    success_count += 1
-                                else:
-                                    errors.append(f"警告 {identifier}: {result['message']}")
-                            except Exception as exc:
-                                errors.append(f"处理错误 {identifier}: {exc}")
-                            
-                            completed += 1
-                            progress = completed / len(input_mols)
-                            current_time = time.time()
-                            
-                            # 限制更新频率，每0.5秒或每完成100个分子更新一次
-                            if (current_time - last_update_time > 0.5) or (completed % 100 == 0) or (completed == len(input_mols)):
-                                elapsed_time = current_time - start_time
-                                
-                                # 更新进度条
-                                progress_bar.progress(progress)
-                                
-                                # 更新指标
-                                completed_metric.metric("已完成", f"{completed:,}/{len(input_mols):,}")
-                                success_metric.metric("成功率", f"{success_count/completed*100:.1f}%" if completed > 0 else "0%")
-                                
-                                if completed > 10:  # 避免初期估算不准
-                                    avg_time_per_mol = elapsed_time / completed
-                                    remaining_time = avg_time_per_mol * (len(input_mols) - completed)
-                                    speed = completed / elapsed_time
-                                    speed_metric.metric("处理速度", f"{speed:.1f} 分子/秒")
-                                    status_text.info(f"⏱️ 预计剩余时间: {remaining_time/60:.1f} 分钟")
-                                else:
-                                    speed_metric.metric("处理速度", "计算中...")
-                                    status_text.info(f"🔄 处理中: {completed:,}/{len(input_mols):,} 分子完成")
-                                
-                                last_update_time = current_time
-
-                    total_time = time.time() - start_time
-                    status_text.success(f"✅ 构象生成完成！总耗时: {total_time/60:.1f} 分钟")
-                    st.success(f"🎉 成功为 {success_count:,}/{len(input_mols):,} 个分子生成了构象！")
-
-                    if errors:
-                        with st.expander("⚠️ 查看错误和警告", expanded=False):
-                            st.markdown("\n".join([f"- {msg}" for msg in errors[:100]]))  # 只显示前100个错误
-                            if len(errors) > 100:
-                                st.warning(f"还有 {len(errors)-100} 个错误未显示...")
-
-                    if processed_mols:
-                        sdf_output = mols_to_sdf_string(processed_mols)
-                        
-                        # 保存到工作目录（如果有的话）
-                        output_filename = f"generated_conformers_{current_filename}.sdf"
-                        if work_dir and os.path.exists(work_dir):
-                            output_path = os.path.join(work_dir, output_filename)
-                            try:
-                                with open(output_path, 'w') as f:
-                                    f.write(sdf_output)
-                                st.success(f"结果已保存到工作目录: {output_path}")
-                            except Exception as e:
-                                st.warning(f"保存到工作目录失败: {e}")
-                        
-                        st.download_button(
-                            label="📥 下载生成的构象 (SDF)",
-                            data=sdf_output,
-                            file_name=output_filename,
-                            mime="chemical/x-mdl-sdfile",
-                        )
-                        
-                        # 显示文件大小信息
-                        output_size_mb = len(sdf_output.encode('utf-8')) / (1024 * 1024)
-                        st.info(f"生成的SDF文件大小: {output_size_mb:.1f} MB")
-                        
-                        st.subheader("生成的SDF预览 (前1000字符)")
-                        st.code(sdf_output[:1000], language="text")
-                    else:
-                        st.warning("没有成功生成构象来创建SDF文件。")
-
-else:
-    if input_method == "上传新文件":
-        st.info("👆 请在上方上传SMILES或SDF文件开始使用。")
+if execution_mode == "智能后台执行 (推荐)":
+    st.markdown("###### 智能后台快速操作")
+    if not input_ready or not scan_successful:
+        st.info("请在步骤一完成文件选择并成功扫描后，再使用后台快速操作。")
     else:
-        st.info("👆 请选择已保存的数据文件夹和文件开始使用。")
+        col_op1, col_op2, col_op3, col_op4 = st.columns(4)
 
-# 快速操作区域
-st.header("🚀 快速操作")
-
-col_op1, col_op2, col_op3, col_op4 = st.columns(4)
-
-with col_op1:
-    if st.button("📝 生成构象脚本", type="primary", help="根据当前配置生成独立的Python脚本"):
-        # 检查是否有选择的文件
-        if not (selected_file_path or uploaded_file):
-            st.error("❌ 请先选择输入文件")
-        else:
-            try:
-                # 确定文件信息
-                if selected_file_path and os.path.exists(selected_file_path):
-                    input_file_path = selected_file_path
-                    current_file_name = os.path.basename(selected_file_path)
-                    work_directory = os.path.dirname(selected_file_path)
-                elif uploaded_file:
-                    # 如果是上传文件但还没保存，先保存
-                    if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
-                        file_path, work_dir_new = save_uploaded_file(uploaded_file)
-                        if file_path:
-                            st.session_state.saved_file_path = file_path
-                            st.session_state.saved_work_dir = work_dir_new
-                            input_file_path = file_path
-                            current_file_name = uploaded_file.name
-                            work_directory = work_dir_new
-                        else:
-                            st.error("❌ 文件保存失败")
-                            st.stop()
-                    else:
-                        input_file_path = st.session_state.saved_file_path
-                        current_file_name = os.path.basename(st.session_state.saved_file_path)
-                        work_directory = st.session_state.saved_work_dir
+        with col_op1:
+            if st.button("📝 生成构象脚本", type="primary", help="根据当前配置生成独立的Python脚本"):
+                if not (selected_file_path or uploaded_file):
+                    st.error("❌ 请先选择输入文件")
                 else:
-                    st.error("❌ 找不到有效的输入文件")
-                    st.stop()
-                
-                # 确定文件类型
-                file_ext = current_file_name.lower().split('.')[-1]
-                
-                # 确定输出文件路径
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_filename = f"conformers_{os.path.splitext(current_file_name)[0]}_{timestamp}.sdf"
-                output_path = os.path.join(work_directory, output_filename)
-                
-                # 处理限制
-                limit_map = {
-                    processing_options[0]: float('inf'),
-                    processing_options[1]: 500,
-                    processing_options[2]: 10000,
-                    processing_options[3]: 100000
-                }
-                processing_limit = limit_map[selected_scope]
-                
-                # 生成脚本
-                script_content = generate_conformer_script(
-                    input_file_path, output_path, num_conformers, max_attempts, 
-                    random_seed, num_workers if execution_mode == "智能后台执行 (推荐)" else 1, 
-                    processing_limit, file_ext, smiles_column
-                )
-                
-                # 保存脚本
-                script_path = os.path.join(work_directory, "conformer_generation.py")
-                
-                with open(script_path, 'w', encoding='utf-8') as f:
-                    f.write(script_content)
-                
-                # 生成配置文件
-                config_content = f"""# 构象生成配置文件
+                    try:
+                        if selected_file_path and os.path.exists(selected_file_path):
+                            input_file_path = selected_file_path
+                            current_file_name = os.path.basename(selected_file_path)
+                            work_directory = os.path.dirname(selected_file_path)
+                        elif uploaded_file:
+                            if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
+                                file_path, work_dir_new = save_uploaded_file(uploaded_file)
+                                if file_path:
+                                    st.session_state.saved_file_path = file_path
+                                    st.session_state.saved_work_dir = work_dir_new
+                                    input_file_path = file_path
+                                    current_file_name = uploaded_file.name
+                                    work_directory = work_dir_new
+                                else:
+                                    st.error("❌ 文件保存失败")
+                                    st.stop()
+                            else:
+                                input_file_path = st.session_state.saved_file_path
+                                current_file_name = os.path.basename(st.session_state.saved_file_path)
+                                work_directory = st.session_state.saved_work_dir
+                        else:
+                            st.error("❌ 找不到有效的输入文件")
+                            st.stop()
+
+                        file_ext = current_file_name.lower().split('.')[-1]
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        output_filename = f"conformers_{os.path.splitext(current_file_name)[0]}_{timestamp}.sdf"
+                        output_path = os.path.join(work_directory, output_filename)
+
+                        script_path, script_name, script_content = generate_conformer_script(
+                            input_file_path, output_path, num_conformers, max_attempts,
+                            random_seed, num_workers, processing_limit, file_ext, smiles_column
+                        )
+
+                        config_filename = f"{script_name}_config.py"
+                        config_content = f"""# 构象生成配置文件
 # 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 INPUT_FILE = r"{input_file_path}"
@@ -1797,158 +1484,157 @@ SMILES_COLUMN = "{smiles_column}"
 NUM_CONFORMERS = {num_conformers}
 MAX_ATTEMPTS = {max_attempts}
 RANDOM_SEED = {random_seed}
-NUM_WORKERS = {num_workers if execution_mode == "智能后台执行 (推荐)" else 1}
+NUM_WORKERS = {num_workers}
 PROCESSING_LIMIT = {processing_limit if processing_limit != float('inf') else 'None'}
 
 # 执行模式
 EXECUTION_MODE = "{execution_mode}"
 PROCESSING_SCOPE = "{selected_scope}"
 """
-                
-                config_path = os.path.join(work_directory, "conformer_config.py")
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    f.write(config_content)
-                
-                st.success(f"✅ 脚本生成完成！")
-                st.info(f"📄 主脚本: {script_path}")
-                st.info(f"⚙️ 配置文件: {config_path}")
-                
-                # 显示文件大小
-                script_size = os.path.getsize(script_path) / 1024
-                config_size = os.path.getsize(config_path) / 1024
-                st.info(f"📊 脚本大小: {script_size:.1f} KB")
-                st.info(f"📊 配置大小: {config_size:.1f} KB")
-                
-                # 提供下载按钮
-                col_dl1, col_dl2 = st.columns(2)
-                with col_dl1:
-                    with open(script_path, 'r', encoding='utf-8') as f:
-                        st.download_button(
-                            "📥 下载主脚本",
-                            f.read(),
-                            file_name="conformer_generation.py",
-                            mime="text/x-python"
-                        )
-                with col_dl2:
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        st.download_button(
-                            "📥 下载配置文件",
-                            f.read(),
-                            file_name="conformer_config.py",
-                            mime="text/x-python"
-                        )
-                
-            except Exception as e:
-                st.error(f"❌ 脚本生成失败: {e}")
-                import traceback
-                st.code(traceback.format_exc(), language="text")
 
-with col_op2:
-    if st.button("🚀 智能后台运行", type="secondary", help="快速启动智能后台构象生成"):
-        # 检查是否有选择的文件
-        if not (selected_file_path or uploaded_file):
-            st.error("❌ 请先选择输入文件")
-        else:
-            try:
-                # 确定工作目录
-                if selected_file_path and os.path.exists(selected_file_path):
-                    work_directory = os.path.dirname(selected_file_path)
-                    current_file_name = os.path.basename(selected_file_path)
-                elif uploaded_file:
-                    # 如果是上传文件但还没保存，先保存
-                    if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
-                        file_path, work_dir_new = save_uploaded_file(uploaded_file)
-                        if file_path:
-                            st.session_state.saved_file_path = file_path
-                            st.session_state.saved_work_dir = work_dir_new
-                            work_directory = work_dir_new
-                            current_file_name = uploaded_file.name
-                        else:
-                            st.error("❌ 文件保存失败")
-                            st.stop()
-                    else:
-                        work_directory = st.session_state.saved_work_dir
-                        current_file_name = os.path.basename(st.session_state.saved_file_path)
-                else:
-                    st.error("❌ 找不到有效的输入文件")
-                    st.stop()
-                
-                # 检查是否存在 conformer_generation.py
-                conformer_script_path = os.path.join(work_directory, "conformer_generation.py")
-                if not os.path.exists(conformer_script_path):
-                    st.error("❌ 未找到 conformer_generation.py 脚本")
-                    st.info("💡 请先点击 '📝 生成构象脚本' 按钮生成脚本文件")
-                    st.stop()
-                
-                # 启动简单的后台运行
-                run_script_path, run_script_name = simple_run_background_conformer(work_directory)
-                
-                st.success(f"✅ 智能后台构象生成已启动！")
-                st.info(f"📄 运行脚本: {run_script_path}")
-                st.info(f"🏷️ 任务名称: {run_script_name}")
-                
-                # 保存任务信息到session state
-                task_info = {
-                    'script_name': run_script_name,
-                    'script_file': run_script_path,
-                    'work_dir': work_directory,
-                    'start_time': time.time(),
-                    'input_file': selected_file_path if selected_file_path else st.session_state.saved_file_path,
-                    'config': {
-                        'num_workers': num_workers,
-                        'num_conformers': num_conformers,
-                        'max_attempts': max_attempts,
-                        'processing_limit': selected_scope,
-                        'file_type': current_file_name.lower().split('.')[-1],
-                        'smiles_column': smiles_column
-                    }
-                }
-                st.session_state.simple_background_tasks.append(task_info)
-                
-                st.success("🎉 任务已添加到后台任务列表！")
-                st.info("💡 查看下方'后台任务监控'区域了解进度")
-                
-            except Exception as e:
-                st.error(f"❌ 智能后台启动失败: {e}")
-                import traceback
-                st.code(traceback.format_exc(), language="text")
+                        config_path = os.path.join(work_directory, config_filename)
+                        with open(config_path, 'w', encoding='utf-8') as f:
+                            f.write(config_content)
 
-with col_op3:
-    if st.button("🔍 预处理检查", help="检查输入文件并生成预处理报告"):
-        # 检查是否有选择的文件
-        if not (selected_file_path or uploaded_file):
-            st.error("❌ 请先选择输入文件")
-        else:
-            try:
-                # 确定文件信息
-                if selected_file_path and os.path.exists(selected_file_path):
-                    input_file_path = selected_file_path
-                    current_file_name = os.path.basename(selected_file_path)
-                    work_directory = os.path.dirname(selected_file_path)
-                elif uploaded_file:
-                    if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
-                        file_path, work_dir_new = save_uploaded_file(uploaded_file)
-                        if file_path:
-                            st.session_state.saved_file_path = file_path
-                            st.session_state.saved_work_dir = work_dir_new
-                            input_file_path = file_path
-                            current_file_name = uploaded_file.name
-                            work_directory = work_dir_new
-                        else:
-                            st.error("❌ 文件保存失败")
-                            st.stop()
-                    else:
-                        input_file_path = st.session_state.saved_file_path
-                        current_file_name = os.path.basename(st.session_state.saved_file_path)
-                        work_directory = st.session_state.saved_work_dir
+                        st.success(f"✅ 脚本生成完成！")
+                        st.info(f"📄 主脚本: {script_path}")
+                        st.info(f"🏷️ 脚本名称: {script_name}")
+                        st.info(f"⚙️ 配置文件: {config_path}")
+
+                        script_size = os.path.getsize(script_path) / 1024
+                        config_size = os.path.getsize(config_path) / 1024
+                        st.info(f"📊 脚本大小: {script_size:.1f} KB")
+                        st.info(f"📊 配置大小: {config_size:.1f} KB")
+
+                        col_dl1, col_dl2 = st.columns(2)
+                        with col_dl1:
+                            with open(script_path, 'r', encoding='utf-8') as f:
+                                st.download_button(
+                                    "📥 下载主脚本",
+                                    f.read(),
+                                    file_name=os.path.basename(script_path),
+                                    mime="text/x-python"
+                                )
+                        with col_dl2:
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                st.download_button(
+                                    "📥 下载配置文件",
+                                    f.read(),
+                                    file_name=os.path.basename(config_path),
+                                    mime="text/x-python"
+                                )
+                    except Exception as e:
+                        st.error(f"❌ 脚本生成失败: {e}")
+                        import traceback
+                        st.code(traceback.format_exc(), language="text")
+
+        with col_op2:
+            if st.button("🚀 智能后台运行", type="secondary", help="快速启动智能后台构象生成"):
+                if not (selected_file_path or uploaded_file):
+                    st.error("❌ 请先选择输入文件")
                 else:
-                    st.error("❌ 找不到有效的输入文件")
-                    st.stop()
-                
-                # 生成预处理脚本
-                file_ext = current_file_name.lower().split('.')[-1]
-                
-                preprocess_script = f'''#!/usr/bin/env python3
+                    try:
+                        if selected_file_path and os.path.exists(selected_file_path):
+                            input_file_path = selected_file_path
+                            work_directory = os.path.dirname(selected_file_path)
+                            current_file_name = os.path.basename(selected_file_path)
+                        elif uploaded_file:
+                            if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
+                                file_path, work_dir_new = save_uploaded_file(uploaded_file)
+                                if not file_path:
+                                    st.error("❌ 文件保存失败")
+                                    st.stop()
+                                st.session_state.saved_file_path = file_path
+                                st.session_state.saved_work_dir = work_dir_new
+                            input_file_path = st.session_state.saved_file_path
+                            work_directory = st.session_state.saved_work_dir
+                            current_file_name = os.path.basename(st.session_state.saved_file_path)
+                        else:
+                            st.error("❌ 找不到有效的输入文件")
+                            st.stop()
+
+                        file_ext = current_file_name.lower().split('.')[-1]
+
+                        script_file, script_name = run_background_conformer_generation(
+                            input_file=input_file_path,
+                            output_dir=work_directory,
+                            num_conformers=num_conformers,
+                            max_attempts=max_attempts,
+                            random_seed=random_seed,
+                            num_workers=num_workers,
+                            processing_limit=processing_limit,
+                            file_type=file_ext,
+                            smiles_column=smiles_column,
+                        )
+
+                        st.success("✅ 智能后台构象生成已启动！")
+                        st.info(f"📄 运行脚本: {script_file}")
+                        st.info(f"🏷️ 任务名称: {script_name}")
+
+                        log_file = os.path.join(work_directory, f"{script_name}_output.log")
+                        progress_file = os.path.join(work_directory, f"{script_name}.progress")
+                        st.info(f"📝 日志文件: {log_file}")
+                        st.info(f"📈 进度文件: {progress_file}")
+
+                        task_info = {
+                            'script_name': script_name,
+                            'script_file': script_file,
+                            'work_dir': work_directory,
+                            'start_time': time.time(),
+                            'input_file': input_file_path,
+                            'log_file': log_file,
+                            'progress_file': progress_file,
+                            'config': {
+                                'num_workers': num_workers,
+                                'num_conformers': num_conformers,
+                                'max_attempts': max_attempts,
+                                'processing_limit': selected_scope,
+                                'file_type': current_file_name.lower().split('.')[-1],
+                                'smiles_column': smiles_column
+                            }
+                        }
+                        st.session_state.simple_background_tasks.append(task_info)
+
+                        st.success("🎉 任务已添加到后台任务列表！")
+                        st.info("💡 查看下方“后台任务监控中心”了解进度")
+                    except Exception as e:
+                        st.error(f"❌ 智能后台启动失败: {e}")
+                        import traceback
+                        st.code(traceback.format_exc(), language="text")
+
+        with col_op3:
+            if st.button("🔍 预处理检查", help="检查输入文件并生成预处理报告"):
+                if not (selected_file_path or uploaded_file):
+                    st.error("❌ 请先选择输入文件")
+                else:
+                    try:
+                        if selected_file_path and os.path.exists(selected_file_path):
+                            input_file_path = selected_file_path
+                            current_file_name = os.path.basename(selected_file_path)
+                            work_directory = os.path.dirname(selected_file_path)
+                        elif uploaded_file:
+                            if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
+                                file_path, work_dir_new = save_uploaded_file(uploaded_file)
+                                if file_path:
+                                    st.session_state.saved_file_path = file_path
+                                    st.session_state.saved_work_dir = work_dir_new
+                                    input_file_path = file_path
+                                    current_file_name = uploaded_file.name
+                                    work_directory = work_dir_new
+                                else:
+                                    st.error("❌ 文件保存失败")
+                                    st.stop()
+                            else:
+                                input_file_path = st.session_state.saved_file_path
+                                current_file_name = os.path.basename(st.session_state.saved_file_path)
+                                work_directory = st.session_state.saved_work_dir
+                        else:
+                            st.error("❌ 找不到有效的输入文件")
+                            st.stop()
+
+                        file_ext = current_file_name.lower().split('.')[-1]
+
+                        preprocess_script = f'''#!/usr/bin/env python3
 """
 分子文件预处理检查脚本
 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -2056,418 +1742,375 @@ def preprocess_check(input_file, file_type, smiles_column="SMILES"):
     else:
         print("❌ 无效分子较多，建议先清理数据")
     
-    print(f"\\n建议构象数: {{min(50, max(10, valid_count//1000))}}")
-    print(f"建议进程数: {{min(34, max(4, valid_count//10000))}}")
+    print(f"\\n建议构象数: {min(50, max(10, valid_count//1000))}")
+    print(f"建议进程数: {min(34, max(4, valid_count//10000))}")
 
 if __name__ == "__main__":
     preprocess_check(r"{input_file_path}", "{file_ext}", "{smiles_column}")
 '''
-                
-                # 保存预处理脚本
-                preprocess_path = os.path.join(work_directory, "preprocess_check.py")
-                with open(preprocess_path, 'w', encoding='utf-8') as f:
-                    f.write(preprocess_script)
-                
-                st.success(f"✅ 预处理脚本已生成: {preprocess_path}")
-                
-                # 提供下载
-                st.download_button(
-                    "📥 下载预处理脚本",
-                    preprocess_script,
-                    file_name="preprocess_check.py",
-                    mime="text/x-python"
-                )
-                
-                # 自动运行预处理检查
-                st.info("🔄 正在运行预处理检查...")
-                try:
-                    result = subprocess.run(
-                        ["python", preprocess_path],
-                        capture_output=True,
-                        text=True,
-                        timeout=60
-                    )
-                    
-                    if result.returncode == 0:
-                        st.subheader("📊 预处理检查结果")
-                        st.code(result.stdout, language="text")
-                    else:
-                        st.error("预处理检查出错:")
-                        st.code(result.stderr, language="text")
-                        
-                except subprocess.TimeoutExpired:
-                    st.warning("⏰ 预处理检查超时，请手动运行脚本")
-                except Exception as e:
-                    st.error(f"运行预处理检查失败: {e}")
-                
-            except Exception as e:
-                st.error(f"❌ 预处理脚本生成失败: {e}")
 
-with col_op4:
-    if st.button("🖥️ 生成SLURM脚本", help="生成用于SLURM集群的任务提交脚本"):
-        # 检查是否有选择的文件
-        if not (selected_file_path or uploaded_file):
-            st.error("❌ 请先选择输入文件")
-        else:
-            try:
-                # 确定文件信息
-                if selected_file_path and os.path.exists(selected_file_path):
-                    input_file_path = selected_file_path
-                    current_file_name = os.path.basename(selected_file_path)
-                    work_directory = os.path.dirname(selected_file_path)
-                elif uploaded_file:
-                    if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
-                        file_path, work_dir_new = save_uploaded_file(uploaded_file)
-                        if file_path:
-                            st.session_state.saved_file_path = file_path
-                            st.session_state.saved_work_dir = work_dir_new
-                            input_file_path = file_path
-                            current_file_name = uploaded_file.name
-                            work_directory = work_dir_new
+                        preprocess_path = os.path.join(work_directory, "preprocess_check.py")
+                        with open(preprocess_path, 'w', encoding='utf-8') as f:
+                            f.write(preprocess_script)
+
+                        st.success(f"✅ 预处理脚本已生成: {preprocess_path}")
+
+                        st.download_button(
+                            "📥 下载预处理脚本",
+                            preprocess_script,
+                            file_name="preprocess_check.py",
+                            mime="text/x-python"
+                        )
+
+                        st.info("🔄 正在运行预处理检查...")
+                        try:
+                            result = subprocess.run(
+                                ["python", preprocess_path],
+                                capture_output=True,
+                                text=True,
+                                timeout=60
+                            )
+
+                            if result.returncode == 0:
+                                st.subheader("📊 预处理检查结果")
+                                st.code(result.stdout, language="text")
+                            else:
+                                st.error("预处理检查出错:")
+                                st.code(result.stderr, language="text")
+
+                        except subprocess.TimeoutExpired:
+                            st.warning("⏰ 预处理检查超时，请手动运行脚本")
+                        except Exception as e:
+                            st.error(f"运行预处理检查失败: {e}")
+                    except Exception as e:
+                        st.error(f"❌ 预处理脚本生成失败: {e}")
+                        import traceback
+                        st.code(traceback.format_exc(), language="text")
+
+        with col_op4:
+            if st.button("🖥️ 生成SLURM脚本", help="生成用于SLURM集群的任务提交脚本"):
+                if not (selected_file_path or uploaded_file):
+                    st.error("❌ 请先选择输入文件")
+                else:
+                    try:
+                        if selected_file_path and os.path.exists(selected_file_path):
+                            input_file_path = selected_file_path
+                            current_file_name = os.path.basename(selected_file_path)
+                            work_directory = os.path.dirname(selected_file_path)
+                        elif uploaded_file:
+                            if not (st.session_state.saved_file_path and os.path.exists(st.session_state.saved_file_path)):
+                                file_path, work_dir_new = save_uploaded_file(uploaded_file)
+                                if file_path:
+                                    st.session_state.saved_file_path = file_path
+                                    st.session_state.saved_work_dir = work_dir_new
+                                    input_file_path = file_path
+                                    current_file_name = uploaded_file.name
+                                    work_directory = work_dir_new
+                                else:
+                                    st.error("❌ 文件保存失败")
+                                    st.stop()
+                            else:
+                                input_file_path = st.session_state.saved_file_path
+                                current_file_name = os.path.basename(st.session_state.saved_file_path)
+                                work_directory = st.session_state.saved_work_dir
                         else:
-                            st.error("❌ 文件保存失败")
+                            st.error("❌ 找不到有效的输入文件")
                             st.stop()
-                    else:
-                        input_file_path = st.session_state.saved_file_path
-                        current_file_name = os.path.basename(st.session_state.saved_file_path)
-                        work_directory = st.session_state.saved_work_dir
-                else:
-                    st.error("❌ 找不到有效的输入文件")
-                    st.stop()
-                
-                # 确定文件类型和输出路径
-                file_ext = current_file_name.lower().split('.')[-1]
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_filename = f"conformers_{os.path.splitext(current_file_name)[0]}_{timestamp}.sdf"
-                
-                # 处理限制
-                limit_map = {
-                    processing_options[0]: float('inf'),
-                    processing_options[1]: 500,
-                    processing_options[2]: 10000,
-                    processing_options[3]: 100000
-                }
-                processing_limit = limit_map[selected_scope]
-                
-                # 估算资源需求
-                if processing_limit == float('inf'):
-                    estimated_molecules = 10000  # 保守估计
-                else:
-                    estimated_molecules = int(processing_limit)
-                
-                # 根据分子数量和构象数估算时间和资源
-                total_conformers = estimated_molecules * num_conformers
-                
-                # 估算运行时间（分钟）：基于经验，每个构象约0.1-1秒
-                estimated_time_hours = max(1, (total_conformers * 0.5) / (60 * num_workers))
-                if estimated_time_hours > 72:
-                    estimated_time_hours = 72  # 最大3天
-                
-                # 估算内存需求（GB）
-                estimated_memory = min(180, max(8, estimated_molecules * 0.01))  # 每个分子约10MB
-                
-                # 智能选择节点数和每节点进程数（针对你的集群优化）
-                if num_workers <= 128:
-                    # 单节点配置
-                    nodes = 1
-                    ntasks_per_node = num_workers
-                    partition = "cpu"
-                    node_constraint = ""
-                else:
-                    # 多节点配置
-                    nodes = min(2, (num_workers + 127) // 128)  # 最多用2个节点(node01+node02)
-                    ntasks_per_node = min(128, (num_workers + nodes - 1) // nodes)
-                    partition = "cpu"
-                    node_constraint = "#SBATCH --nodelist=node01,node02  # 优先使用CPU节点"
-                
-                # 生成SLURM脚本
-                slurm_script = f'''#!/bin/bash
-#SBATCH --job-name=conformer_{os.path.splitext(current_file_name)[0]}
-#SBATCH --partition={partition}
-#SBATCH --nodes={nodes}
-#SBATCH --ntasks-per-node={ntasks_per_node}
-#SBATCH --cpus-per-task=1
-#SBATCH --mem={int(estimated_memory)}G
-#SBATCH --time={int(estimated_time_hours):02d}:00:00
+
+                        estimated_molecules = total_mols if (total_mols and total_mols > 0) else 100000
+                        total_conformers = estimated_molecules * num_conformers
+                        estimated_time_hours = max(1, total_conformers / (num_workers * 5000))
+                        estimated_memory = max(16, num_workers * 2)
+
+                        slurm_script = f'''#!/bin/bash
+#SBATCH --job-name=conformer_{datetime.now().strftime('%m%d')}
+#SBATCH --partition=compute
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node={num_workers}
+#SBATCH --time={int(estimated_time_hours)+1}:00:00
+#SBATCH --mem={estimated_memory}G
 #SBATCH --output=conformer_%j.out
 #SBATCH --error=conformer_%j.err
-#SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=guanliangyu@example.com  # 请修改为你的邮箱
-{node_constraint}
 
-# 任务信息
-echo "=================================================="
-echo "作业名称: conformer_{os.path.splitext(current_file_name)[0]}"
-echo "提交时间: $(date)"
-echo "作业ID: $SLURM_JOB_ID"
-echo "分配节点: $SLURM_JOB_NODELIST"
-echo "总进程数: $SLURM_NTASKS"
-echo "每节点进程数: $SLURM_NTASKS_PER_NODE"
-echo "=================================================="
+module purge
+# module load your_env_module
+# source activate CADD-Toolbox
 
-# 环境设置
-# 如果需要加载模块，请取消注释并修改以下行：
-# module load python/3.8
-# module load rdkit
-# module load anaconda3
-
-# 或者激活conda环境：
-# source ~/miniconda3/etc/profile.d/conda.sh
-# conda activate CADD-Toolbox
-
-# 显示Python和关键库版本
-echo "Python版本："
-python --version
-echo "RDKit版本："
-python -c "from rdkit import rdVersion; print('RDKit version:', rdVersion.rdkitVersion)"
-
-# 切换到工作目录
 cd {work_directory}
-echo "工作目录: $(pwd)"
 
-# 任务参数
-echo "输入文件: {input_file_path}"
-echo "输出文件: {output_filename}"
-echo "构象数/分子: {num_conformers}"
-echo "处理范围: {selected_scope}"
-echo "工作进程数: {num_workers}"
-echo "估算分子数: {estimated_molecules}"
-echo "估算总构象数: {total_conformers}"
-
-# 开始计时
-start_time=$(date +%s)
-echo "开始时间: $(date)"
-
-# 运行构象生成脚本
-echo "=================================================="
-echo "开始运行构象生成..."
-python conformer_generation.py
-
-# 检查运行结果
-exit_code=$?
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-
-echo "=================================================="
-echo "任务完成时间: $(date)"
-echo "总运行时间: $((elapsed_time / 3600))小时 $(((elapsed_time % 3600) / 60))分钟 $((elapsed_time % 60))秒"
-
-if [ $exit_code -eq 0 ]; then
-    echo "✅ 构象生成成功完成！"
-    
-    # 检查输出文件
-    if [ -f "{output_filename}" ]; then
-        output_size=$(stat -c%s "{output_filename}")
-        output_size_mb=$((output_size / 1024 / 1024))
-        echo "输出文件大小: ${{output_size_mb}} MB"
-        
-        # 简单统计SDF文件中的分子数
-        mol_count=$(grep -c '\\$\\$\\$\\$' "{output_filename}" || echo "0")
-        echo "生成构象数: $mol_count"
-    else
-        echo "⚠️  警告: 输出文件不存在"
-    fi
-    
-    # 检查日志文件
-    log_file="{output_filename.replace('.sdf', '.log')}"
-    if [ -f "$log_file" ]; then
-        echo "日志文件: $log_file"
-        echo "最后几行日志："
-        tail -n 10 "$log_file"
-    fi
-    
-else
-    echo "❌ 构象生成失败，退出码: $exit_code"
-    
-    # 显示错误信息
-    if [ -f "conformer_$SLURM_JOB_ID.err" ]; then
-        echo "错误信息："
-        cat "conformer_$SLURM_JOB_ID.err"
-    fi
-fi
-
-# 资源使用统计
-echo "=================================================="
-echo "资源使用统计："
-echo "最大内存使用: $(sacct -j $SLURM_JOB_ID --format=MaxRSS --noheader --parsable2 | head -1)"
-echo "CPU时间: $(sacct -j $SLURM_JOB_ID --format=CPUTime --noheader --parsable2 | head -1)"
-
-exit $exit_code
-'''
-
-                # 生成提交命令文件
-                submit_script = f'''#!/bin/bash
-# SLURM任务提交脚本
-# 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-echo "准备提交构象生成任务到SLURM集群..."
-echo "工作目录: {work_directory}"
-echo "输入文件: {input_file_path}"
-echo "预计运行时间: {estimated_time_hours:.1f} 小时"
-echo "预计内存需求: {estimated_memory:.0f} GB"
-echo "使用节点数: {nodes}"
-echo "每节点进程数: {ntasks_per_node}"
-
-# 检查必要文件是否存在
 if [ ! -f "conformer_generation.py" ]; then
     echo "❌ 错误: 找不到 conformer_generation.py"
-    echo "请先点击'生成构象脚本'按钮生成必要的脚本文件"
     exit 1
 fi
 
-if [ ! -f "{os.path.basename(input_file_path)}" ]; then
-    echo "❌ 错误: 找不到输入文件 {os.path.basename(input_file_path)}"
-    exit 1
-fi
-
-# 提交任务
-echo "提交任务到SLURM..."
-job_id=$(sbatch conformer_slurm.sh | awk '{{print $4}}')
-
-if [ $? -eq 0 ]; then
-    echo "✅ 任务提交成功！"
-    echo "作业ID: $job_id"
-    echo ""
-    echo "监控命令："
-    echo "  查看队列状态: squeue -u $USER"
-    echo "  查看作业详情: scontrol show job $job_id"
-    echo "  查看实时输出: tail -f conformer_${{job_id}}.out"
-    echo "  取消作业: scancel $job_id"
-    echo ""
-    echo "输出文件将保存为: {output_filename}"
-    echo "日志文件: {output_filename.replace('.sdf', '.log')}"
-else
-    echo "❌ 任务提交失败！"
-    exit 1
-fi
+python conformer_generation.py
 '''
 
-                # 保存SLURM脚本
-                slurm_path = os.path.join(work_directory, "conformer_slurm.sh")
-                submit_path = os.path.join(work_directory, "submit_job.sh")
-                
-                with open(slurm_path, 'w', encoding='utf-8') as f:
-                    f.write(slurm_script)
-                
-                with open(submit_path, 'w', encoding='utf-8') as f:
-                    f.write(submit_script)
-                
-                # 设置执行权限
-                import stat
-                os.chmod(slurm_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IROTH)
-                os.chmod(submit_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IROTH)
-                
-                st.success(f"✅ SLURM脚本生成完成！")
-                st.info(f"📄 SLURM脚本: {slurm_path}")
-                st.info(f"🚀 提交脚本: {submit_path}")
-                
-                # 显示资源估算
-                col_res1, col_res2, col_res3 = st.columns(3)
-                with col_res1:
-                    st.metric("预计运行时间", f"{estimated_time_hours:.1f}小时")
-                with col_res2:
-                    st.metric("内存需求", f"{estimated_memory:.0f}GB")
-                with col_res3:
-                    st.metric("使用节点", f"{nodes}节点×{ntasks_per_node}进程")
-                
-                # 显示使用说明
-                st.subheader("📋 使用说明")
-                st.markdown(f"""
-                **步骤1：生成构象脚本**
-                ```bash
-                # 确保先生成了 conformer_generation.py 脚本
-                ```
-                
-                **步骤2：上传文件到集群**
-                ```bash
-                # 将以下文件上传到集群的 {work_directory} 目录：
-                # - conformer_generation.py (构象生成脚本)
-                # - conformer_slurm.sh (SLURM作业脚本)
-                # - submit_job.sh (提交脚本)
-                # - {os.path.basename(input_file_path)} (输入文件)
-                ```
-                
-                **步骤3：在集群上运行**
-                ```bash
-                cd {work_directory}
-                ./submit_job.sh
-                ```
-                
-                **步骤4：监控任务**
-                ```bash
-                squeue -u guanliangyu              # 查看队列状态
-                tail -f conformer_JOBID.out       # 查看实时输出
-                sacct -j JOBID --format=JobID,State,ExitCode,MaxRSS,CPUTime  # 查看资源使用
-                ```
-                """)
-                
-                # 提供下载按钮
-                col_dl1, col_dl2 = st.columns(2)
-                with col_dl1:
-                    st.download_button(
-                        "📥 下载SLURM脚本",
-                        slurm_script,
-                        file_name="conformer_slurm.sh",
-                        mime="text/x-shellscript"
-                    )
-                with col_dl2:
-                    st.download_button(
-                        "📥 下载提交脚本", 
-                        submit_script,
-                        file_name="submit_job.sh",
-                        mime="text/x-shellscript"
-                    )
-                
-                # 高级配置选项
-                with st.expander("🔧 高级SLURM配置", expanded=False):
-                    st.markdown(f"""
-                    **当前配置解析：**
-                    - **分区**: {partition} (针对CPU密集型任务优化)
-                    - **节点**: {nodes} 节点 × {ntasks_per_node} 进程/节点 = {num_workers} 总进程
-                    - **内存**: {estimated_memory:.0f}GB (基于 {estimated_molecules} 个分子估算)
-                    - **时间**: {estimated_time_hours:.1f}小时 (基于 {total_conformers} 个构象估算)
-                    
-                    **进程数配置建议：**
-                    - **1-64进程**: 适合本地测试和中等规模任务
-                    - **65-128进程**: 单节点最佳配置，充分利用128核心
-                    - **129-256进程**: 双节点配置，适合大规模任务
-                    
-                    **可调整参数：**
-                    - 修改 `#SBATCH --mail-user=` 为你的邮箱地址
-                    - 根据实际需要调整内存和时间限制  
-                    - 大任务建议使用128+进程数以充分利用集群资源
-                    
-                    **环境设置：**
-                    - 取消注释并修改模块加载命令
-                    - 或激活你的conda环境：`conda activate CADD-Toolbox`
-                    - 确保RDKit等依赖库已安装
-                    """)
-                
-            except Exception as e:
-                st.error(f"❌ SLURM脚本生成失败: {e}")
-                import traceback
-                st.code(traceback.format_exc(), language="text")
+                        slurm_path = os.path.join(work_directory, "conformer_slurm.sh")
+                        with open(slurm_path, 'w', encoding='utf-8') as f:
+                            f.write(slurm_script)
 
-# 显示当前配置摘要
-with st.expander("⚙️ 当前配置摘要", expanded=False):
-    st.markdown(f"""
-    **文件配置:**
-    - 输入方式: {input_method}
-    - 选中文件: {current_filename if 'current_filename' in locals() and current_filename else '未选择'}
-    - SMILES列名: {smiles_column}
-    
-    **构象设置:**
-    - 构象数/分子: {num_conformers}
-    - 最大尝试次数: {max_attempts}
-    - 随机种子: {random_seed}
-    
-    **执行配置:**
-    - 执行模式: {execution_mode}
-    - 工作进程数: {num_workers if execution_mode == "智能后台执行 (推荐)" else num_threads}
-    - 处理范围: {selected_scope}
-    """)
+                        st.success(f"✅ SLURM脚本已生成: {slurm_path}")
+                        st.download_button(
+                            "📥 下载SLURM脚本",
+                            slurm_script,
+                            file_name="conformer_slurm.sh",
+                            mime="text/x-shellscript"
+                        )
+                    except Exception as e:
+                        st.error(f"❌ SLURM脚本生成失败: {e}")
+                        import traceback
+                        st.code(traceback.format_exc(), language="text")
+else:
+    st.markdown("###### Streamlit执行说明")
+    if not input_ready or not scan_successful:
+        st.info("请先完成步骤一的数据扫描，确认文件可用后方可进行前台执行。")
+    else:
+        st.success("✅ 数据已准备，可在步骤四直接执行并实时查看进度。")
 
-st.markdown("---")
+# 文件处理和预览
+input_ready = (uploaded_file is not None) or (selected_file_path is not None and os.path.exists(selected_file_path))
+
+# 执行任务
+st.subheader("步骤四 · 执行任务")
+
+if not input_ready:
+    st.info("请先完成步骤一的文件选择。")
+elif not scan_successful:
+    st.info("请确认上方数据预览已成功完成。")
+elif execution_mode == "智能后台执行 (推荐)":
+    st.info("💡 后台执行相关按钮已在步骤三的“智能后台快速操作”中提供。")
+else:
+    if total_mols in (None, 0):
+        st.warning("未检测到可用分子，请检查输入文件。")
+    else:
+        if total_mols == -1:
+            if processing_limit == float('inf'):
+                mol_count_label = "CSV中的所有分子"
+            else:
+                mol_count_label = f"前{int(processing_limit)}个"
+        else:
+            if processing_limit == float('inf'):
+                mol_count_label = f"{total_mols:,}"
+            else:
+                actual_count = min(total_mols, int(processing_limit))
+                mol_count_label = f"{actual_count:,}"
+
+        if processing_limit != float('inf') and total_mols not in (None, -1) and total_mols > processing_limit:
+            st.info(f"范围选择: 将处理 {total_mols:,} 个条目中的前{int(processing_limit):,}个")
+
+        if st.session_state.file_size_cache and st.session_state.file_size_cache > LARGE_FILE_THRESHOLD:
+            st.warning("⚡ **大文件建议**: 对于百万级分子库，建议选择较小的处理范围以获得更好的性能")
+
+        button_label = f"为 {mol_count_label} 个分子生成 {num_conformers} 个构象 (前台: {num_threads} 线程)"
+
+        if st.button(button_label):
+            st.info("🔄 在Streamlit内进行并行构象生成")
+
+            input_mols = []
+            source_ids = []
+            limit = int(processing_limit) if processing_limit != float('inf') else float('inf')
+
+            with st.spinner(f"正在从 '{current_filename}' 加载和解析分子..."):
+                try:
+                    current_file = uploaded_file if uploaded_file else selected_file_path
+                    if hasattr(current_file, 'seek'):
+                        current_file.seek(0)
+
+                    file_ext = current_filename.lower().split('.')[-1]
+
+                    if file_ext == "csv":
+                        if st.session_state.file_size_cache > LARGE_FILE_THRESHOLD:
+                            st.info("⚡ 使用分块读取模式处理大CSV文件...")
+                            chunk_size = 10000
+                            total_processed = 0
+
+                            for chunk in pd.read_csv(current_file, chunksize=chunk_size):
+                                if smiles_column in chunk.columns:
+                                    for idx, row in chunk.iterrows():
+                                        if len(input_mols) >= limit:
+                                            break
+                                        smi = str(row[smiles_column])
+                                        mol = Chem.MolFromSmiles(smi)
+                                        if mol:
+                                            input_mols.append(mol)
+                                            source_ids.append(f"行 {total_processed + idx + 1}: {smi}")
+                                    total_processed += len(chunk)
+                                    if len(input_mols) >= limit:
+                                        break
+                                    if total_processed % 50000 == 0:
+                                        if not hasattr(st.session_state, 'parse_status_placeholder'):
+                                            st.session_state.parse_status_placeholder = st.empty()
+                                        st.session_state.parse_status_placeholder.info(
+                                            f"🔄 解析进度: {total_processed:,} 行，{len(input_mols):,} 个有效分子")
+                        else:
+                            df_full = pd.read_csv(current_file)
+                            csv_row_count = len(df_full)
+                            st.info(f"CSV完全读取完成。包含 {csv_row_count:,} 行数据。开始解析...")
+
+                            if smiles_column in df_full.columns:
+                                for idx, row in df_full.iterrows():
+                                    if len(input_mols) >= limit:
+                                        break
+                                    smi = str(row[smiles_column])
+                                    mol = Chem.MolFromSmiles(smi)
+                                    if mol:
+                                        input_mols.append(mol)
+                                        source_ids.append(f"行 {idx+1}: {smi}")
+                            else:
+                                st.error(f"SMILES列 '{smiles_column}' 不存在，请重新检查。")
+                                st.stop()
+
+                    elif file_ext in ["txt", "smi"]:
+                        if isinstance(current_file, str):
+                            with open(current_file, "r", encoding="utf-8") as f:
+                                for i, line in enumerate(f):
+                                    if len(input_mols) >= limit:
+                                        break
+                                    smi = line.strip()
+                                    if smi:
+                                        mol = Chem.MolFromSmiles(smi)
+                                        if mol:
+                                            input_mols.append(mol)
+                                            source_ids.append(f"行 {i+1}: {smi}")
+                                    if st.session_state.file_size_cache > LARGE_FILE_THRESHOLD and i % 10000 == 0 and i > 0:
+                                        if not hasattr(st.session_state, 'parse_status_placeholder'):
+                                            st.session_state.parse_status_placeholder = st.empty()
+                                        st.session_state.parse_status_placeholder.info(
+                                            f"🔄 解析进度: {i:,} 行，{len(input_mols):,} 个有效分子")
+                        else:
+                            with io.TextIOWrapper(current_file, encoding="utf-8") as text_reader:
+                                for i, line in enumerate(text_reader):
+                                    if len(input_mols) >= limit:
+                                        break
+                                    smi = line.strip()
+                                    if smi:
+                                        mol = Chem.MolFromSmiles(smi)
+                                        if mol:
+                                            input_mols.append(mol)
+                                            source_ids.append(f"行 {i+1}: {smi}")
+
+                    elif file_ext == "sdf":
+                        if isinstance(current_file, str):
+                            supplier = Chem.ForwardSDMolSupplier(current_file, removeHs=False, sanitize=True)
+                        else:
+                            sdf_stream = io.BytesIO(current_file.getvalue())
+                            supplier = Chem.ForwardSDMolSupplier(sdf_stream, removeHs=False, sanitize=True)
+
+                        for i, mol in enumerate(supplier):
+                            if len(input_mols) >= limit:
+                                break
+                            if mol is not None:
+                                input_mols.append(mol)
+                                source_ids.append(f"SDF分子 {i+1} ({Chem.MolToSmiles(mol)})")
+
+                    if not input_mols:
+                        st.warning("基于当前范围，没有解析到有效分子用于生成。")
+                        st.stop()
+
+                except Exception as e:
+                    st.error(f"完整解析 '{current_filename}' 时出错: {e}")
+                    st.stop()
+
+            progress_container = st.container()
+            with progress_container:
+                progress_bar = st.progress(0.0)
+                status_text = st.empty()
+                stats_col1, stats_col2, stats_col3 = st.columns(3)
+                with stats_col1:
+                    completed_metric = st.empty()
+                with stats_col2:
+                    success_metric = st.empty()
+                with stats_col3:
+                    speed_metric = st.empty()
+
+            processed_mols = []
+            success_count = 0
+            errors = []
+
+            tasks = [(mol, num_conformers, max_attempts, random_seed) for mol in input_mols]
+
+            completed = 0
+            start_time = time.time()
+            last_update_time = start_time
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                future_to_idx = {executor.submit(generate_conformers_for_mol, *task): i for i, task in enumerate(tasks)}
+
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    identifier = source_ids[idx]
+
+                    try:
+                        result = future.result()
+                        if result['success'] and result['mol']:
+                            processed_mols.append(result['mol'])
+                            success_count += 1
+                        else:
+                            errors.append(f"警告 {identifier}: {result['message']}")
+                    except Exception as exc:
+                        errors.append(f"处理错误 {identifier}: {exc}")
+
+                    completed += 1
+                    progress = completed / len(input_mols)
+                    current_time = time.time()
+
+                    if (current_time - last_update_time > 0.5) or (completed % 100 == 0) or (completed == len(input_mols)):
+                        elapsed_time = current_time - start_time
+                        progress_bar.progress(progress)
+
+                        completed_metric.metric("已完成", f"{completed:,}/{len(input_mols):,}")
+                        success_metric.metric("成功率", f"{success_count/completed*100:.1f}%" if completed > 0 else "0%")
+
+                        if completed > 10:
+                            avg_time_per_mol = elapsed_time / completed
+                            remaining_time = avg_time_per_mol * (len(input_mols) - completed)
+                            speed = completed / elapsed_time
+                            speed_metric.metric("处理速度", f"{speed:.1f} 分子/秒")
+                            status_text.info(f"⏱️ 预计剩余时间: {remaining_time/60:.1f} 分钟")
+                        else:
+                            speed_metric.metric("处理速度", "计算中...")
+                            status_text.info(f"🔄 处理中: {completed:,}/{len(input_mols):,} 分子完成")
+
+                        last_update_time = current_time
+
+            total_time = time.time() - start_time
+            status_text.success(f"✅ 构象生成完成！总耗时: {total_time/60:.1f} 分钟")
+            st.success(f"🎉 成功为 {success_count:,}/{len(input_mols):,} 个分子生成了构象！")
+
+            if errors:
+                with st.expander("⚠️ 查看错误和警告", expanded=False):
+                    st.markdown("\n".join([f"- {msg}" for msg in errors[:100]]))
+                    if len(errors) > 100:
+                        st.warning(f"还有 {len(errors)-100} 个错误未显示...")
+
+            if processed_mols:
+                sdf_output = mols_to_sdf_string(processed_mols)
+
+                output_filename = f"generated_conformers_{current_filename}.sdf"
+                if work_dir and os.path.exists(work_dir):
+                    output_path = os.path.join(work_dir, output_filename)
+                    try:
+                        with open(output_path, 'w') as f:
+                            f.write(sdf_output)
+                        st.success(f"结果已保存到工作目录: {output_path}")
+                    except Exception as e:
+                        st.warning(f"保存到工作目录失败: {e}")
+
+                st.download_button(
+                    label="📥 下载生成的构象 (SDF)",
+                    data=sdf_output,
+                    file_name=output_filename,
+                    mime="chemical/x-mdl-sdfile",
+                )
+
+                output_size_mb = len(sdf_output.encode('utf-8')) / (1024 * 1024)
+                st.info(f"生成的SDF文件大小: {output_size_mb:.1f} MB")
+
+                st.subheader("生成的SDF预览 (前1000字符)")
+                st.code(sdf_output[:1000], language="text")
+            else:
+                st.warning("没有成功生成构象来创建SDF文件。")
 
 # 简化的后台任务监控区域
 st.header("🤖 后台任务监控")
