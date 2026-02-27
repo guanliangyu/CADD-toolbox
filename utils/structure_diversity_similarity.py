@@ -19,7 +19,6 @@ except Exception:
     FAISS_AVAILABLE = False
 
 try:
-    import cupy as cp
 
     CUPY_AVAILABLE = True
 except Exception:

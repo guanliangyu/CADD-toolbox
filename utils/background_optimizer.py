@@ -5,14 +5,10 @@
 """
 
 import os
-import sys
 import time
-import json
-import signal
 import argparse
 import subprocess
 from datetime import datetime
-from pathlib import Path
 
 def create_background_optimizer_script(
     input_file,
@@ -156,7 +152,7 @@ def preprocess_molecule(mol):
                 pos = conf.GetAtomPosition(i)
                 if not all([abs(pos.x) < 999, abs(pos.y) < 999, abs(pos.z) < 999]):
                     return None
-        except:
+        except Exception:
             return None
         
         # 创建分子副本
@@ -165,7 +161,7 @@ def preprocess_molecule(mol):
         # 进行基本的分子清理
         try:
             Chem.SanitizeMol(mol_clean)
-        except:
+        except Exception:
             return None
         
         # 验证分子结构
@@ -516,7 +512,7 @@ def run_background_optimization(
         # 使用nohup在后台运行
         cmd = f"nohup python {script_file} > {log_file} 2>&1 &"
         
-        print(f"🚀 启动后台进程...")
+        print("🚀 启动后台进程...")
         print(f"📝 日志文件: {log_file}")
         print(f"🔍 监控命令: tail -f {log_file}")
         print(f"⛔ 停止命令: pkill -f {script_name}")
@@ -563,7 +559,7 @@ def check_background_status(output_dir, script_name):
                     'cpu_percent': process.cpu_percent(),
                     'memory_mb': process.memory_info().rss / 1024 / 1024
                 }
-        except:
+        except Exception:
             pass
     
     # 检查完成标志

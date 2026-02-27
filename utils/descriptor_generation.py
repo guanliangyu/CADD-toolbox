@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
+from rdkit.Chem import Descriptors, rdMolDescriptors
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 try:
     from rdkit.Chem.Avalon import pyAvalonTools  # type: ignore
@@ -130,7 +130,8 @@ def generate_molecular_descriptors(
             for desc_name, desc_func in descriptor_functions.items():
                 try:
                     row[desc_name] = desc_func(mol)
-                except Exception:  # pylint: disable=broad-except
+                except Exception:
+                    # pylint: disable=broad-except
                     row[desc_name] = np.nan
 
         descriptors.append(row)
@@ -197,7 +198,8 @@ def generate_fingerprints(
                     fp = generator.GetFingerprint(mol)
 
                 fp_array = _bitvect_to_array(fp, bit_length)
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
+                # pylint: disable=broad-except
                 fp_array = np.zeros((bit_length,), dtype=np.uint8)
 
         fingerprints.append(fp_array)

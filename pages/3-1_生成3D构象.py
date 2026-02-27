@@ -11,11 +11,8 @@ import multiprocessing
 import os
 import uuid
 from datetime import datetime
-import shutil
 import time
 import subprocess
-import signal
-import sys
 
 from utils.background_conformer_generator import run_background_conformer_generation
 
@@ -665,9 +662,9 @@ def simple_check_background_status(work_dir, script_name):
                         'cpu_percent': process.cpu_percent(),
                         'memory_mb': process.memory_info().rss / 1024 / 1024
                     }
-            except:
+            except Exception:
                 pass
-        except:
+        except Exception:
             pass
     
     # 检查完成标志
@@ -677,7 +674,7 @@ def simple_check_background_status(work_dir, script_name):
             with open(completion_file, 'r') as f:
                 content = f.read()
             return {'status': 'completed', 'details': content}
-        except:
+        except Exception:
             return {'status': 'completed', 'details': '任务已完成'}
     
     # 检查错误标志
@@ -687,7 +684,7 @@ def simple_check_background_status(work_dir, script_name):
             with open(error_file, 'r') as f:
                 content = f.read()
             return {'status': 'error', 'details': content}
-        except:
+        except Exception:
             return {'status': 'error', 'details': '任务执行出错'}
     
     return {'status': 'unknown'}
@@ -860,7 +857,7 @@ def generate_conformers_for_mol(args):
                 # 尝试部分sanitize
                 try:
                     Chem.SanitizeMol(mol, Chem.SanitizeFlags.SANITIZE_ALL^Chem.SanitizeFlags.SANITIZE_KEKULIZE)
-                except:
+                except Exception:
                     pass  # 继续尝试处理
             
             # 添加氢原子
@@ -1496,7 +1493,7 @@ PROCESSING_SCOPE = "{selected_scope}"
                         with open(config_path, 'w', encoding='utf-8') as f:
                             f.write(config_content)
 
-                        st.success(f"✅ 脚本生成完成！")
+                        st.success("✅ 脚本生成完成！")
                         st.info(f"📄 主脚本: {script_path}")
                         st.info(f"🏷️ 脚本名称: {script_name}")
                         st.info(f"⚙️ 配置文件: {config_path}")
@@ -1742,8 +1739,8 @@ def preprocess_check(input_file, file_type, smiles_column="SMILES"):
     else:
         print("❌ 无效分子较多，建议先清理数据")
     
-    print(f"\\n建议构象数: {min(50, max(10, valid_count//1000))}")
-    print(f"建议进程数: {min(34, max(4, valid_count//10000))}")
+    print(f"\\n建议构象数: {{min(50, max(10, valid_count//1000))}}")
+    print(f"建议进程数: {{min(34, max(4, valid_count//10000))}}")
 
 if __name__ == "__main__":
     preprocess_check(r"{input_file_path}", "{file_ext}", "{smiles_column}")

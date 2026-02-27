@@ -4,7 +4,6 @@ CADD-Toolbox - 多样性筛选页面 (GPU高度优化版)
 """
 
 import os
-import sys
 import time
 import numpy as np
 import pandas as pd
@@ -358,7 +357,6 @@ def greedy_selection_gpu_optimized(data_tensor, subset_size, distance_method='eu
                                    use_matrix_mode=True, batch_size=32, use_half_precision=False):
     """GPU版本高度优化的贪心算法多样性筛选"""
     torch.manual_seed(seed)
-    device = data_tensor.device
     N = len(data_tensor)
     
     st.info(f"🚀 启动GPU优化版贪心算法 (矩阵模式: {use_matrix_mode}, 批量大小: {batch_size})")
@@ -431,8 +429,7 @@ def _greedy_selection_matrix_mode(data_tensor, subset_size, distance_method, ini
 def _greedy_selection_batch_mode(data_tensor, subset_size, distance_method, initial_method, seed, batch_size, use_half_precision):
     """批量模式：每次选择多个点，提升并行度"""
     torch.manual_seed(seed)
-    device = data_tensor.device
-    N = len(data_tensor)
+    len(data_tensor)
     
     st.info(f"🔥 批量选择模式 (批量大小: {batch_size})")
     
@@ -529,8 +526,7 @@ def _get_initial_point(data_tensor, initial_method, distance_method):
 
 def _compute_min_distances_optimized(data_tensor, selected_indices, distance_method, use_half_precision=False):
     """优化的最小距离计算"""
-    device = data_tensor.device
-    N = len(data_tensor)
+    len(data_tensor)
     
     if use_half_precision and AMP_AVAILABLE:
         with autocast():
@@ -540,8 +536,7 @@ def _compute_min_distances_optimized(data_tensor, selected_indices, distance_met
 
 def _compute_min_distances_core(data_tensor, selected_indices, distance_method):
     """最小距离计算核心函数"""
-    device = data_tensor.device
-    N = len(data_tensor)
+    len(data_tensor)
     
     if len(selected_indices) == 1:
         # 单点情况
@@ -755,7 +750,7 @@ if selected_folder:
                             with open(file_path, 'r') as f:
                                 row_count = sum(1 for line in f) - 1  # 减去表头
                             st.session_state[cache_key] = row_count
-                        except Exception as e:
+                        except Exception:
                             st.session_state[cache_key] = "读取失败"
                 
                 # 显示缓存的结果
@@ -1077,7 +1072,7 @@ if selected_folder:
                     if gpu_mode == "batch":
                         performance_info.append(f"📦 **批量大小**: {batch_size}")
                     if use_half_precision:
-                        performance_info.append(f"⚡ **混合精度**: 已启用 (FP16)")
+                        performance_info.append("⚡ **混合精度**: 已启用 (FP16)")
                     performance_info.append(f"🎮 **GPU设备**: {torch.cuda.get_device_name(0)}")
                     
                     st.info(" | ".join(performance_info))

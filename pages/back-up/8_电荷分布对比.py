@@ -8,16 +8,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors, rdPartialCharges
+from rdkit.Chem import AllChem, rdMolDescriptors
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import seaborn as sns
 import umap
 import torch
-from multiprocessing import Pool, cpu_count
-from functools import partial
-import time
-from tqdm.auto import tqdm
+from multiprocessing import cpu_count
 
 try:
     import umap
@@ -92,7 +89,7 @@ def compute_gasteiger_charges(mol):
             else:
                 charges.append(0.0)
         return charges
-    except:
+    except Exception:
         return None
 
 def calc_dipole_moment(mol, charges):
@@ -122,7 +119,7 @@ def calc_charge_features(mol):
         AllChem.EmbedMolecule(mol3d, AllChem.ETKDGv3())
         try:
             AllChem.MMFFOptimizeMolecule(mol3d)
-        except:
+        except Exception:
             pass
         mol = mol3d
     
@@ -147,7 +144,7 @@ def calc_peoe_vsa_descriptors(mol):
     try:
         vsa_vals = rdMolDescriptors.CalcPEOE_VSA(mol)
         return list(vsa_vals)
-    except:
+    except Exception:
         return None
 
 def assemble_electrostatic_df(mols, max_samples=1000):

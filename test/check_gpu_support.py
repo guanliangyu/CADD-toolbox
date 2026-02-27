@@ -2,7 +2,6 @@
 """GPU支持情况检测脚本"""
 from __future__ import annotations
 
-import textwrap
 from dataclasses import dataclass
 
 

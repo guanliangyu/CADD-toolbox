@@ -4,10 +4,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import List, Dict, Tuple, Union, Optional, Any
+from typing import List, Dict, Tuple, Any
 
 from rdkit import DataStructs
-from rdkit import Chem
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 
@@ -29,8 +28,8 @@ def calculate_nearest_neighbor_distance(query_fps: List[Any],
     返回:
         (距离数组, 平均距离, 最大距离, 中位数距离)
     """
-    n_query = len(query_fps)
-    n_ref = len(ref_fps)
+    len(query_fps)
+    len(ref_fps)
     
     nn_distances = []
     
@@ -42,7 +41,7 @@ def calculate_nearest_neighbor_distance(query_fps: List[Any],
                 try:
                     sim = DataStructs.TanimotoSimilarity(q_fp, r_fp)
                     d = 1.0 - sim
-                except:
+                except Exception:
                     # 如果是NumPy数组
                     a_bits = np.array(q_fp, dtype=bool)
                     b_bits = np.array(r_fp, dtype=bool)

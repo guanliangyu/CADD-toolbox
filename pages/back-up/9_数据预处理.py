@@ -7,10 +7,8 @@ import pandas as pd
 import streamlit as st
 from rdkit import Chem
 from rdkit.Chem import PandasTools
-from rdkit.Chem import AllChem
 from rdkit.Chem import Draw
 import tempfile
-import logging
 from rdkit import RDLogger
 
 # 设置RDKit日志级别
@@ -90,7 +88,7 @@ def process_sdf(file):
                     valid_smiles.append(canonical_smi)
                 else:
                     invalid_count += 1
-            except:
+            except Exception:
                 invalid_count += 1
             
             # 更新进度
@@ -171,7 +169,7 @@ def process_csv(file):
                     invalid_count += 1
                     if len(invalid_smiles) < 5:  # 只记录前5个无效的SMILES
                         invalid_smiles.append(smi)
-            except Exception as e:
+            except Exception:
                 invalid_count += 1
                 if len(invalid_smiles) < 5:
                     invalid_smiles.append(smi)
@@ -243,7 +241,7 @@ def display_molecule_grid(df, n_cols=5, n_rows=2):
             if mol:
                 mols.append(mol)
                 legends.append(f"#{i+1}")
-        except:
+        except Exception:
             continue
     
     if mols:
@@ -337,7 +335,7 @@ if uploaded_file is not None:
                 # 显示统计信息
                 st.subheader("数据统计")
                 st.write(f"- 总记录数：{len(output_df)}")
-                st.write(f"- 包含字段：SMILES, Name")
+                st.write("- 包含字段：SMILES, Name")
                 
                 # 验证SMILES
                 valid_count = sum(1 for smi in output_df['SMILES'] if Chem.MolFromSmiles(smi) is not None)

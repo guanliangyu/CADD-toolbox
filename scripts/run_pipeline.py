@@ -30,14 +30,14 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
 sys.path.append(project_root)
 
-from utils.molecular_utils import MoleculeProcessor
-from utils.clustering_utils import (
+from utils.molecular_utils import MoleculeProcessor  # noqa: E402
+from utils.clustering_utils import (  # noqa: E402
     butina_clustering, kmeans_clustering, maxmin_selection, 
     hdbscan_clustering, select_cluster_representatives,
     select_representatives_from_kmeans
 )
-from utils.feature_utils import DimensionalityReducer, FeatureCombiner
-from utils.validation_utils import (
+from utils.feature_utils import DimensionalityReducer, FeatureCombiner  # noqa: E402
+from utils.validation_utils import (  # noqa: E402
     calculate_nearest_neighbor_distance, plot_property_distributions,
     plot_nearest_neighbor_histogram,
     calculate_coverage_metrics
@@ -442,7 +442,7 @@ def validate_subset(full_results, subset_indices, config):
     logger.info("验证子集代表性")
     
     # 准备子集数据
-    subset_mols = [full_results['mols'][i] for i in subset_indices]
+    [full_results['mols'][i] for i in subset_indices]
     subset_fps = [full_results['fps'][i] for i in subset_indices]
     subset_basic_desc = [full_results['basic_desc'][i] for i in subset_indices]
     

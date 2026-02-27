@@ -1,9 +1,8 @@
 """
 分子处理工具模块 - 提供处理分子结构、计算特征等功能
 """
-import os
 import numpy as np
-from typing import List, Dict, Tuple, Union, Optional, Any
+from typing import List, Dict, Union, Optional, Any
 import logging
 
 from rdkit import Chem
@@ -69,7 +68,7 @@ class MoleculeProcessor:
                 mol = Chem.MolFromSmiles(Chem.MolToSmiles(mol))
             
             return mol
-        except:
+        except Exception:
             return mol  # 返回原始分子，如果标准化失败
     
     def _passes_filters(self, mol: Chem.Mol) -> bool:

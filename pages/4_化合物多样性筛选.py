@@ -6,11 +6,11 @@ CADD-Toolbox - 多样性筛选页面 (脚本生成 + 后台执行版)
 2. 支持一键后台执行、日志监控、结果下载
 """
 
-import os, sys, json, time, gc, subprocess, multiprocessing as mp
+import os
+import time
+import subprocess
 from datetime import datetime
 
-import numpy as np
-import pandas as pd
 import streamlit as st
 
 try:

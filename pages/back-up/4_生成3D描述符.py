@@ -4,19 +4,15 @@ CADD-Toolbox - 3D分子描述符生成页面
 """
 
 import os
-import sys
-import io
 import time
 import numpy as np
 import pandas as pd
 import streamlit as st
 from datetime import datetime
 import multiprocessing
-import subprocess
 
 # RDKit imports
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Descriptors3D, AllChem
 
 # Mordred imports
 try:
@@ -552,10 +548,10 @@ else:
                     
                     if processing_option == "仅处理前1000个分子（测试用）":
                         processing_limit = 1000
-                        st.info(f"🧪 测试模式: 仅处理前1000个分子")
+                        st.info("🧪 测试模式: 仅处理前1000个分子")
                     else:
                         processing_limit = float('inf')  # 不设限制，处理所有分子
-                        st.info(f"🚀 生产模式: 处理文件中的所有分子（支持百万级）")
+                        st.info("🚀 生产模式: 处理文件中的所有分子（支持百万级）")
                 
                 with col2:
                     st.markdown("**多构象聚合策略**")
@@ -691,7 +687,7 @@ else:
                                     try:
                                         smiles = Chem.MolToSmiles(mol_info['mol'])
                                         smiles_list.append(smiles)
-                                    except:
+                                    except Exception:
                                         smiles_list.append("Invalid")
                         
                         total_conformers = sum(mol_info['conformer_count'] for mol_info in molecules)
@@ -814,7 +810,7 @@ else:
                                         detached=True
                                     )
                                 
-                                st.success(f"✅ 智能后台描述符计算已启动！")
+                                st.success("✅ 智能后台描述符计算已启动！")
                                 st.info(f"📄 脚本文件: {script_file}")
                                 st.info(f"🏷️ 任务名称: {script_name}")
                                 

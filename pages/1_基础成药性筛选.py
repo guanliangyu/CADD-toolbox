@@ -684,7 +684,7 @@ if selected_folder and selected_file:
                         # 清理临时文件
                         try:
                             shutil.rmtree(temp_dir)
-                        except:
+                        except Exception:
                             pass
             
             else:  # 单进程处理
@@ -912,17 +912,17 @@ if selected_folder and selected_file:
                 
                 # 应用预设规则
                 if use_lipinski:
-                    filtered_df = filtered_df[filtered_df['Lipinski_Pass'] == True]
+                    filtered_df = filtered_df[filtered_df['Lipinski_Pass']]
                 if use_veber:
-                    filtered_df = filtered_df[filtered_df['Veber_Pass'] == True]
+                    filtered_df = filtered_df[filtered_df['Veber_Pass']]
                 if use_egan:
-                    filtered_df = filtered_df[filtered_df['Egan_Pass'] == True]
+                    filtered_df = filtered_df[filtered_df['Egan_Pass']]
                 if use_muegge:
-                    filtered_df = filtered_df[filtered_df['Muegge_Pass'] == True]
+                    filtered_df = filtered_df[filtered_df['Muegge_Pass']]
                 if pains_mode.get('keep_only') and 'PAINS_Flag' in filtered_df.columns:
-                    filtered_df = filtered_df[filtered_df['PAINS_Flag'] == True]
+                    filtered_df = filtered_df[filtered_df['PAINS_Flag']]
                 elif pains_mode.get('exclude') and 'PAINS_Flag' in filtered_df.columns:
-                    filtered_df = filtered_df[filtered_df['PAINS_Flag'] == False]
+                    filtered_df = filtered_df[not filtered_df['PAINS_Flag']]
 
                 # 应用自定义范围筛选
                 if filter_conditions:

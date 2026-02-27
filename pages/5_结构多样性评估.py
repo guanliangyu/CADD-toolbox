@@ -57,7 +57,7 @@ try:
             FAISS_GPU_AVAILABLE = True
         else:
             FAISS_GPU_AVAILABLE = False
-    except:
+    except Exception:
         FAISS_GPU_AVAILABLE = False
 except ImportError:
     FAISS_AVAILABLE = False

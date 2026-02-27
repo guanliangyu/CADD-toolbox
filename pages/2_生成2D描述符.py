@@ -123,7 +123,7 @@ if selected_folder:
         try:
             file_size = os.path.getsize(file_path) / (1024 * 1024)
             st.info(f"📁 文件大小: {file_size:.2f} MB")
-        except:
+        except Exception:
             pass
 
 # 读取和预览数据
@@ -563,7 +563,7 @@ if 'df' in locals() and 'smiles_column' in locals() and descriptor_types:
             status_text.text("处理完成")
             total_time = time.time() - start_time
 
-            st.success(f"🎉 2D描述符生成完成！")
+            st.success("🎉 2D描述符生成完成！")
             st.info(f"总耗时: {total_time:.1f}秒 | 最终数据: {len(final_df)} 行 × {len(final_df.columns)} 列")
             
             # 显示结果统计

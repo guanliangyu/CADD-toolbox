@@ -3,8 +3,9 @@ GPU加速工具模块 - 提供GPU相关功能和检测
 """
 import os
 import logging
+import importlib.util
 import numpy as np
-from typing import List, Dict, Tuple, Union, Optional, Any, Callable
+from typing import Dict, Tuple, Any
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -69,12 +70,12 @@ def check_gpu_availability() -> Dict[str, bool]:
     
     # 检查CUML
     try:
-        import cuml
-        _CUML_AVAILABLE = True
-        _GPU_AVAILABLE = True
-        logger.info("CUML (GPU机器学习库) 可用")
-    except ImportError:
-        logger.info("CUML未安装")
+        if importlib.util.find_spec("cuml") is not None:
+            _CUML_AVAILABLE = True
+            _GPU_AVAILABLE = True
+            logger.info("CUML (GPU机器学习库) 可用")
+        else:
+            logger.info("CUML未安装")
     except Exception as e:
         logger.warning(f"检查CUML时出错: {e}")
     
@@ -202,7 +203,7 @@ class GPUKMeans:
                     max_iter=max_iter
                 )
                 logger.info("使用CUML后端进行K-means聚类")
-            except:
+            except Exception:
                 self._backend = None
         
         if self._backend is None and _FAISS_GPU_AVAILABLE:
@@ -211,7 +212,7 @@ class GPUKMeans:
                 self._backend = 'faiss'
                 self._res = faiss.StandardGpuResources()
                 logger.info("使用FAISS GPU后端进行K-means聚类")
-            except:
+            except Exception:
                 self._backend = None
                 
         if self._backend is None:

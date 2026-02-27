@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import seaborn as sns
-from typing import List, Optional, Union, Tuple, Dict
+from typing import List, Optional, Union, Tuple
 import pandas as pd
 import logging
 import umap

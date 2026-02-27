@@ -5,7 +5,6 @@
 """
 
 import os
-import sys
 import argparse
 from datetime import datetime
 
@@ -126,7 +125,7 @@ def check_log_completion(log_file):
                 result['completed_count'] = completed_num
                 result['total_count'] = total_num
                 result['progress_percent'] = progress_percent
-            except:
+            except Exception:
                 pass
         
         return result
@@ -168,7 +167,7 @@ def print_analysis_report(work_dir):
     """生成详细的分析报告"""
     
     print(f"\n{'='*60}")
-    print(f"📊 工作目录分析报告")
+    print("📊 工作目录分析报告")
     print(f"{'='*60}")
     print(f"📁 目录: {work_dir}")
     print(f"🕐 分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -181,7 +180,7 @@ def print_analysis_report(work_dir):
         print(f"❌ {dir_analysis['message']}")
         return
     
-    print(f"📋 文件统计:")
+    print("📋 文件统计:")
     print(f"  📄 总文件数: {dir_analysis['total_files']}")
     print(f"  🧪 SDF文件: {len(dir_analysis['sdf_files'])}")
     print(f"  📝 日志文件: {len(dir_analysis['log_files'])}")
@@ -192,14 +191,14 @@ def print_analysis_report(work_dir):
     
     # 分析SDF文件
     if dir_analysis['sdf_files']:
-        print(f"🧪 SDF文件分析:")
+        print("🧪 SDF文件分析:")
         for sdf_file in dir_analysis['sdf_files']:
             full_path = os.path.join(work_dir, sdf_file)
             print(f"\n  📄 {sdf_file}:")
             
             validation = validate_sdf_file(full_path)
             if validation['status'] == 'success':
-                print(f"    ✅ 验证成功")
+                print("    ✅ 验证成功")
                 print(f"    📏 文件大小: {validation['file_size_mb']:.1f} MB")
                 print(f"    🔢 总条目: {validation['total_entries']:,}")
                 print(f"    ✅ 有效分子: {validation['valid_molecules']:,}")
@@ -208,7 +207,7 @@ def print_analysis_report(work_dir):
                 print(f"    📊 平均构象/分子: {validation['avg_conformers_per_mol']:.1f}")
                 
                 if validation['valid_molecules'] == validation['total_entries']:
-                    print(f"    🎉 所有分子都有效！")
+                    print("    🎉 所有分子都有效！")
                 elif validation['valid_molecules'] > 0:
                     success_rate = (validation['valid_molecules'] / validation['total_entries']) * 100
                     print(f"    📈 成功率: {success_rate:.1f}%")
@@ -217,7 +216,7 @@ def print_analysis_report(work_dir):
     
     # 分析日志文件
     if dir_analysis['log_files']:
-        print(f"\n📝 日志文件分析:")
+        print("\n📝 日志文件分析:")
         for log_file in dir_analysis['log_files']:
             full_path = os.path.join(work_dir, log_file)
             print(f"\n  📄 {log_file}:")
@@ -227,20 +226,20 @@ def print_analysis_report(work_dir):
                 print(f"    📏 日志行数: {log_analysis['total_lines']:,}")
                 
                 if log_analysis['completion_found']:
-                    print(f"    ✅ 发现完成标志")
+                    print("    ✅ 发现完成标志")
                 elif log_analysis['error_found']:
-                    print(f"    ❌ 发现错误标志")
+                    print("    ❌ 发现错误标志")
                 elif log_analysis['last_progress']:
                     print(f"    ⏳ 最后进度: {log_analysis['last_progress']}")
                     if 'progress_percent' in log_analysis:
                         print(f"    📊 完成度: {log_analysis['progress_percent']:.1f}%")
                 else:
-                    print(f"    ❓ 无明确进度信息")
+                    print("    ❓ 无明确进度信息")
             else:
                 print(f"    ❌ 分析失败: {log_analysis['message']}")
     
     # 给出建议
-    print(f"\n💡 建议:")
+    print("\n💡 建议:")
     
     # 检查是否有未完成的优化
     has_input_sdf = any('generated_conformers' in f for f in dir_analysis['sdf_files'])
@@ -249,17 +248,17 @@ def print_analysis_report(work_dir):
     has_completion = len(dir_analysis['done_files']) > 0
     
     if has_completion:
-        print(f"  ✅ 任务已正常完成")
+        print("  ✅ 任务已正常完成")
     elif has_errors:
-        print(f"  ❌ 任务执行时出现错误，检查错误文件")
+        print("  ❌ 任务执行时出现错误，检查错误文件")
     elif has_input_sdf and not has_output_sdf:
-        print(f"  🔄 发现输入文件但无输出文件，可能需要重新运行优化")
-        print(f"  💡 使用新的智能后台优化功能重新启动任务")
+        print("  🔄 发现输入文件但无输出文件，可能需要重新运行优化")
+        print("  💡 使用新的智能后台优化功能重新启动任务")
     elif has_input_sdf and has_output_sdf:
-        print(f"  ✅ 发现输入和输出文件，任务可能已完成")
-        print(f"  🔍 建议验证输出文件的完整性")
+        print("  ✅ 发现输入和输出文件，任务可能已完成")
+        print("  🔍 建议验证输出文件的完整性")
     else:
-        print(f"  ❓ 目录状态不明确，建议检查文件内容")
+        print("  ❓ 目录状态不明确，建议检查文件内容")
     
     print(f"\n{'='*60}")
 

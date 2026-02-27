@@ -35,9 +35,6 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     needs: lint
-    strategy:
-      matrix:
-        python-version: ["3.10"]
     steps:
       - uses: actions/checkout@v4
 
@@ -46,10 +43,8 @@ jobs:
         with:
           micromamba-version: "1.5.7"
           cache-environment: true
-          environment-file: environment.yml
+          environment-file: environment.ci.yml
           environment-name: cadd-toolbox
-          create-args: >-
-            python=${{ matrix.python-version }}
 
       - name: Environment info
         shell: bash -l {0}

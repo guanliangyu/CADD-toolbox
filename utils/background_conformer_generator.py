@@ -5,14 +5,10 @@
 """
 
 import os
-import sys
 import time
-import json
-import signal
 import argparse
 import subprocess
 from datetime import datetime
-from pathlib import Path
 
 def create_background_conformer_script(
     input_file,
@@ -149,7 +145,7 @@ def monitor_resources():
             'cpu_percent': cpu_percent,
             'available_memory_gb': psutil.virtual_memory().available / 1024 / 1024 / 1024
         }}
-    except:
+    except Exception:
         return {{'memory_mb': 0, 'cpu_percent': 0, 'available_memory_gb': 0}}
 
 def save_checkpoint(results, checkpoint_file, metadata):
@@ -219,7 +215,7 @@ def generate_conformers_for_mol(args):
                 # 尝试部分sanitize
                 try:
                     Chem.SanitizeMol(mol, Chem.SanitizeFlags.SANITIZE_ALL^Chem.SanitizeFlags.SANITIZE_KEKULIZE)
-                except:
+                except Exception:
                     pass  # 继续尝试处理
             
             # 添加氢原子
@@ -717,7 +713,7 @@ def run_background_conformer_generation(
         # 使用nohup在后台运行
         cmd = f"nohup python {script_file} > {log_file} 2>&1 &"
         
-        print(f"🚀 启动后台进程...")
+        print("🚀 启动后台进程...")
         print(f"📝 日志文件: {log_file}")
         print(f"🔍 监控命令: tail -f {log_file}")
         print(f"⛔ 停止命令: pkill -f {script_name}")
@@ -764,7 +760,7 @@ def check_background_conformer_status(output_dir, script_name):
                     'cpu_percent': process.cpu_percent(),
                     'memory_mb': process.memory_info().rss / 1024 / 1024
                 }
-        except:
+        except Exception:
             pass
     
     # 检查完成标志

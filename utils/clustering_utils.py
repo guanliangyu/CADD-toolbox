@@ -3,11 +3,9 @@
 """
 import numpy as np
 import logging
-from typing import List, Dict, Tuple, Union, Optional, Any, Callable
-import time
+from typing import List, Dict, Tuple, Optional, Any
 from tqdm import tqdm
 
-from rdkit import Chem
 from rdkit import DataStructs
 from rdkit.ML.Cluster import Butina
 from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
@@ -86,7 +84,7 @@ def calculate_distance_matrix(fps: List[Any], metric: str = 'tanimoto',
                     try:
                         sim = DataStructs.TanimotoSimilarity(fps[i], fps[j])
                         d = 1.0 - sim
-                    except:
+                    except Exception:
                         # 如果是NumPy数组
                         a_bits = np.array(fps[i], dtype=bool)
                         b_bits = np.array(fps[j], dtype=bool)
@@ -167,7 +165,7 @@ def butina_clustering(fps: List[Any], cutoff: float = 0.4,
                 try:
                     sim = DataStructs.TanimotoSimilarity(fps[i], fps[j])
                     d = 1.0 - sim
-                except:
+                except Exception:
                     # 如果是NumPy数组
                     a_bits = np.array(fps[i], dtype=bool)
                     b_bits = np.array(fps[j], dtype=bool)
@@ -229,7 +227,7 @@ def kmeans_clustering(features: np.ndarray, n_clusters: int,
             labels = gpu_kmeans.fit_predict(features)
             centers = gpu_kmeans.cluster_centers_
             
-            logger.info(f"GPU K-means聚类完成")
+            logger.info("GPU K-means聚类完成")
             return labels, centers
         except Exception as e:
             logger.warning(f"GPU K-means聚类失败: {e}，回退到CPU计算")
@@ -247,7 +245,7 @@ def kmeans_clustering(features: np.ndarray, n_clusters: int,
     labels = kmeans.fit_predict(features)
     centers = kmeans.cluster_centers_
     
-    logger.info(f"CPU K-means聚类完成")
+    logger.info("CPU K-means聚类完成")
     return labels, centers
 
 
@@ -323,7 +321,7 @@ def maxmin_selection(fps: List[Any], num_to_select: int,
                 # 如果是RDKit指纹对象
                 sim = DataStructs.TanimotoSimilarity(fps[i], fps[j])
                 return 1.0 - sim
-            except:
+            except Exception:
                 # 如果是NumPy数组
                 a_bits = np.array(fps[i], dtype=bool)
                 b_bits = np.array(fps[j], dtype=bool)
@@ -386,7 +384,7 @@ def hdbscan_clustering(features: np.ndarray, min_cluster_size: int = 5,
             import cuml.cluster
             
             # 使用cuML的HDBSCAN实现
-            logger.info(f"使用GPU进行HDBSCAN聚类")
+            logger.info("使用GPU进行HDBSCAN聚类")
             clusterer = cuml.cluster.HDBSCAN(
                 min_cluster_size=min_cluster_size,
                 min_samples=min_samples,
@@ -402,13 +400,13 @@ def hdbscan_clustering(features: np.ndarray, min_cluster_size: int = 5,
             else:
                 labels = np.array(labels)
                 
-            logger.info(f"GPU HDBSCAN聚类完成")
+            logger.info("GPU HDBSCAN聚类完成")
             return labels
         except (ImportError, Exception) as e:
             logger.warning(f"GPU HDBSCAN聚类失败: {e}，回退到CPU计算")
     
     # 使用CPU HDBSCAN
-    logger.info(f"使用CPU进行HDBSCAN聚类")
+    logger.info("使用CPU进行HDBSCAN聚类")
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size,
                                min_samples=min_samples,
                                metric='euclidean',
@@ -417,7 +415,7 @@ def hdbscan_clustering(features: np.ndarray, min_cluster_size: int = 5,
     # 执行聚类
     labels = clusterer.fit_predict(features)
     
-    logger.info(f"CPU HDBSCAN聚类完成")
+    logger.info("CPU HDBSCAN聚类完成")
     return labels
 
 
@@ -505,7 +503,7 @@ def select_cluster_representatives(clusters: List[List[int]], fps: List[Any],
                     if i != j:
                         try:
                             sim = DataStructs.TanimotoSimilarity(fps[idx], fps[other_idx])
-                        except:
+                        except Exception:
                             # 如果是NumPy数组
                             a_bits = np.array(fps[idx], dtype=bool)
                             b_bits = np.array(fps[other_idx], dtype=bool)

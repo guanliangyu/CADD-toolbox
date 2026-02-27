@@ -5,15 +5,10 @@ CADD-Toolbox - 多样性筛选页面 (后台执行版)
 """
 
 import os
-import sys
-import json
 import time
 import subprocess
-import multiprocessing as mp
 from datetime import datetime
 
-import numpy as np
-import pandas as pd
 import streamlit as st
 
 try:
@@ -487,7 +482,7 @@ if selected_folder:
                             with open(file_path, 'r') as f:
                                 row_count = sum(1 for line in f) - 1  # 减去表头
                             st.session_state[cache_key] = row_count
-                        except Exception as e:
+                        except Exception:
                             st.session_state[cache_key] = "读取失败"
                 
                 row_count = st.session_state[cache_key]

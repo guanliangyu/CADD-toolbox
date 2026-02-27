@@ -3,7 +3,7 @@
 """
 import numpy as np
 import logging
-from typing import List, Dict, Tuple, Union, Optional, Any
+from typing import List, Dict, Optional, Any
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.decomposition import PCA
@@ -11,8 +11,6 @@ from sklearn.manifold import TSNE
 import umap
 
 from rdkit import DataStructs
-from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
 
 # 引入GPU工具
 try:
@@ -417,7 +415,7 @@ class ReferenceSetMapper:
                 if self.metric == 'tanimoto':
                     try:
                         sim = DataStructs.TanimotoSimilarity(fp, ref_fp)
-                    except:
+                    except Exception:
                         # 如果是NumPy数组
                         a_bits = np.array(fp, dtype=bool)
                         b_bits = np.array(ref_fp, dtype=bool)

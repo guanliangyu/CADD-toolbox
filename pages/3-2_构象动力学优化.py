@@ -2,7 +2,6 @@
 构象动力学优化页面 - 使用OpenMM进行分子动力学优化
 """
 import streamlit as st
-import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolAlign
 import io
@@ -12,14 +11,8 @@ import numpy as np
 from datetime import datetime
 import time
 import multiprocessing
-import concurrent.futures
-from multiprocessing import cpu_count
-import pickle
 import sys
-import tempfile
-from pathlib import Path
 import subprocess
-import threading
 
 # 导入后台优化工具
 sys.path.append('.')
@@ -33,9 +26,6 @@ except ImportError:
 # OpenMM相关导入
 try:
     import openmm
-    from openmm import app, unit
-    from openmm.app import PDBFile, ForceField, Modeller, Simulation
-    from openmm.unit import nanometer, picosecond, femtosecond, kelvin, kilojoule_per_mole
     OPENMM_AVAILABLE = True
 except ImportError:
     OPENMM_AVAILABLE = False
@@ -212,7 +202,7 @@ def smart_scan_sdf_with_progress(file_to_scan, current_filename):
             # 简单估算：假设每个分子约3KB
             estimated_total = int(file_size / 3000)
             scan_status.info(f"🔍 大文件检测：估算约 {estimated_total:,} 个分子")
-        except:
+        except Exception:
             pass
     
     # 扫描分子
@@ -296,7 +286,7 @@ def preprocess_molecule(mol):
                 pos = conf.GetAtomPosition(i)
                 if not all(np.isfinite([pos.x, pos.y, pos.z])):
                     return None
-        except:
+        except Exception:
             return None
         
         # 创建分子副本，移除氢原子再重新添加以确保正确的氢原子位置
@@ -305,7 +295,7 @@ def preprocess_molecule(mol):
         # 进行基本的分子清理
         try:
             Chem.SanitizeMol(mol_copy)
-        except:
+        except Exception:
             return None
         
         # 验证分子结构
@@ -321,7 +311,7 @@ def preprocess_molecule(mol):
             mol_copy.SetProp('_Name', original_name)
             
         return mol_copy
-    except Exception as e:
+    except Exception:
         return None
 
 def mol_to_pdb_string(mol, conf_id=0):
@@ -329,7 +319,7 @@ def mol_to_pdb_string(mol, conf_id=0):
     try:
         pdb_block = Chem.MolToPDBBlock(mol, confId=conf_id)
         return pdb_block
-    except Exception as e:
+    except Exception:
         return None
 
 def optimize_molecule_with_rdkit_and_openmm(mol, conf_id=0, steps=1000, temperature=300, use_gpu=True):
@@ -403,7 +393,7 @@ def calculate_rmsd(mol1, mol2, conf_id1=0, conf_id2=0):
     try:
         rmsd = rdMolAlign.AlignMol(mol1, mol2, prbCid=conf_id1, refCid=conf_id2)
         return rmsd
-    except:
+    except Exception:
         return float('inf')
 
 def calculate_rmsd_batch(args):
@@ -418,10 +408,10 @@ def calculate_rmsd_batch(args):
                 rmsd = rdMolAlign.AlignMol(mol, existing_mol, prbCid=0, refCid=0)
                 if rmsd < threshold:
                     return mol_idx, False, rmsd, existing_idx
-            except:
+            except Exception:
                 continue
         return mol_idx, True, None, None
-    except Exception as e:
+    except Exception:
         return mol_idx, True, None, None  # 错误时当作独特构象
 
 def get_molecule_identifier(mol):
@@ -431,11 +421,11 @@ def get_molecule_identifier(mol):
         mol_copy = Chem.Mol(mol)
         Chem.RemoveStereochemistry(mol_copy)
         return Chem.MolToSmiles(mol_copy, canonical=True)
-    except:
+    except Exception:
         # 如果失败，返回一个基于分子图的哈希
         try:
             return Chem.MolToSmiles(mol, canonical=True, isomericSmiles=False)
-        except:
+        except Exception:
             return f"mol_{id(mol)}"  # 最后的回退方案
 
 def group_molecules_by_structure(optimized_mols):
@@ -539,7 +529,7 @@ def merge_similar_conformers_serial_group(group_molecules, group_indices, rmsd_t
                 if rmsd < rmsd_threshold:
                     is_unique = False
                     break
-            except:
+            except Exception:
                 continue
         
         if is_unique:
@@ -566,7 +556,7 @@ def merge_similar_conformers_serial(optimized_mols, rmsd_threshold=0.5):
                 if rmsd < rmsd_threshold:
                     is_unique = False
                     break
-            except:
+            except Exception:
                 continue
         
         if is_unique:
@@ -577,7 +567,6 @@ def merge_similar_conformers_serial(optimized_mols, rmsd_threshold=0.5):
 
 def merge_similar_conformers_parallel_impl(valid_mols, rmsd_threshold, max_workers=None):
     """并行实现的构象合并"""
-    import math
     
     if max_workers is None:
         max_workers = min(8, multiprocessing.cpu_count())
@@ -624,7 +613,7 @@ def merge_similar_conformers_parallel_impl(valid_mols, rmsd_threshold, max_worke
                             if rmsd < rmsd_threshold:
                                 is_unique = False
                                 break
-                        except:
+                        except Exception:
                             continue
                     if is_unique:
                         unique_mols.append(mol)
@@ -639,7 +628,7 @@ def merge_similar_conformers_parallel_impl(valid_mols, rmsd_threshold, max_worke
                         if rmsd < rmsd_threshold:
                             is_unique = False
                             break
-                    except:
+                    except Exception:
                         continue
                 if is_unique:
                     unique_mols.append(mol)
@@ -732,7 +721,7 @@ def preprocess_molecule(mol):
                 if not all([abs(pos.x) < 999, abs(pos.y) < 999, abs(pos.z) < 999]):
                     logger.warning("分子坐标异常，跳过")
                     return None
-        except:
+        except Exception:
             logger.warning("无法获取分子坐标，跳过")
             return None
         
@@ -742,7 +731,7 @@ def preprocess_molecule(mol):
         # 进行基本的分子清理
         try:
             Chem.SanitizeMol(mol_clean)
-        except:
+        except Exception:
             logger.warning("分子清理失败，跳过")
             return None
         
@@ -1023,12 +1012,12 @@ if OPENMM_AVAILABLE:
         platform = openmm.Platform.getPlatformByName('CUDA')
         gpu_available = True
         st.success("🚀 OpenMM + GPU (CUDA) 可用作高级选项")
-    except:
+    except Exception:
         try:
             platform = openmm.Platform.getPlatformByName('OpenCL') 
             gpu_available = True
             st.success("🚀 OpenMM + GPU (OpenCL) 可用作高级选项")
-        except:
+        except Exception:
             st.info("ℹ️ 当前使用CPU优化模式（推荐）")
 
 # 文件输入方式选择
@@ -1433,7 +1422,7 @@ if input_ready:
                                 detached=True
                             )
                             
-                            st.success(f"✅ 智能后台优化已启动！")
+                            st.success("✅ 智能后台优化已启动！")
                             st.info(f"📄 脚本文件: {script_file}")
                             st.info(f"🏷️ 任务名称: {script_name}")
                             

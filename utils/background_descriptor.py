@@ -7,13 +7,9 @@
 import os
 import sys
 import time
-import json
-import signal
 import argparse
 import subprocess
-import pickle
 from datetime import datetime
-from pathlib import Path
 
 def create_background_descriptor_script(
     input_file,
@@ -246,7 +242,7 @@ def calculate_molecule_descriptors_worker(args):
         smiles = None
         try:
             smiles = Chem.MolToSmiles(mol) if mol else None
-        except:
+        except Exception:
             smiles = "Invalid"
         
         return (mol_id, smiles, aggregated_desc.tolist())
@@ -566,7 +562,7 @@ def run_background_descriptor_calculation(
             # 直接使用当前Python解释器
             cmd = f"nohup {python_path} {script_file} > {log_file} 2>&1 &"
         
-        print(f"🚀 启动后台进程...")
+        print("🚀 启动后台进程...")
         print(f"🐍 Python环境: {conda_env} ({python_path})")
         print(f"📝 日志文件: {log_file}")
         print(f"💻 执行命令: {cmd}")
@@ -622,7 +618,7 @@ def check_background_descriptor_status(output_dir, script_name):
                     'cpu_percent': process.cpu_percent(),
                     'memory_mb': process.memory_info().rss / 1024 / 1024
                 }
-        except:
+        except Exception:
             pass
     
     # 检查完成标志

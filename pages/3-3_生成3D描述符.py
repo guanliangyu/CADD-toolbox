@@ -5,25 +5,18 @@ CADD-Toolbox - 3D分子描述符生成页面 (优化版 + 中断继续)
 """
 
 import os
-import sys
 import csv
 import time
 import gzip
-import pathlib
 import multiprocessing as mp
 from datetime import datetime
-import itertools
-import json
-from itertools import islice
 
 import numpy as np
-import pandas as pd
 import streamlit as st
-from tqdm import tqdm
 
 # RDKit imports
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors
+from rdkit.Chem import AllChem
 
 # Mordred imports
 try:
@@ -302,7 +295,7 @@ def stream_compute_descriptors(input_file, output_file, config, progress_callbac
         if hasattr(supplier_preview, '_temp_file') and supplier_preview._temp_file:
             try:
                 os.unlink(supplier_preview._temp_file)
-            except:
+            except Exception:
                 pass
         
         # 添加属性列到表头
@@ -337,20 +330,20 @@ def stream_compute_descriptors(input_file, output_file, config, progress_callbac
                 for prop_name in mol.GetPropNames():
                     try:
                         mol_props[prop_name] = mol.GetProp(prop_name)
-                    except:
+                    except Exception:
                         mol_props[prop_name] = ''
                 
                 # 延迟sanitize - 只对需要的分子进行
                 try:
                     Chem.SanitizeMol(mol)
-                except:
+                except Exception:
                     continue  # 跳过无法sanitize的分子
                 
                 # 确保有3D坐标（如果需要3D描述符）
                 if include_3d and mol.GetNumConformers() == 0:
                     try:
                         AllChem.EmbedMolecule(mol, randomSeed=42)
-                    except:
+                    except Exception:
                         continue  # 跳过无法生成3D坐标的分子
                 
                 yield mol, mol_id, mol_props
@@ -397,7 +390,7 @@ def stream_compute_descriptors(input_file, output_file, config, progress_callbac
                                 for prop_name, prop_value in mol_props.items():
                                     try:
                                         mol_copy.SetProp(prop_name, prop_value)
-                                    except:
+                                    except Exception:
                                         pass
                                 
                                 conf_mol_id = f"{mol_id}_conf_{conf_id}" if mol.GetNumConformers() > 1 else mol_id
@@ -436,7 +429,7 @@ def stream_compute_descriptors(input_file, output_file, config, progress_callbac
                             try:
                                 smiles = Chem.MolToSmiles(mol)
                                 row_data.append(smiles)
-                            except:
+                            except Exception:
                                 row_data.append('')
                         
                         # 添加其他分子属性
@@ -489,7 +482,7 @@ def stream_compute_descriptors(input_file, output_file, config, progress_callbac
                             for prop_name, prop_value in mol_props.items():
                                 try:
                                     mol_copy.SetProp(prop_name, prop_value)
-                                except:
+                                except Exception:
                                     pass
                             
                             temp_mols.append(mol_copy)
@@ -514,7 +507,7 @@ def stream_compute_descriptors(input_file, output_file, config, progress_callbac
                                     clean_values.append(float(val) if np.isfinite(val) else np.nan)
                                 else:
                                     clean_values.append(np.nan)
-                            except:
+                            except Exception:
                                 clean_values.append(np.nan)
                         
                         molecule_data[mol_id]['conformer_values'].append(clean_values)
@@ -585,7 +578,7 @@ def stream_compute_descriptors(input_file, output_file, config, progress_callbac
         if hasattr(supplier, '_temp_file') and supplier._temp_file:
             try:
                 os.unlink(supplier._temp_file)
-            except:
+            except Exception:
                 pass
         
         elapsed_time = time.time() - start_time
@@ -647,7 +640,7 @@ def split_large_sdf(input_file, chunk_size=50000, output_dir=None):
         if hasattr(supplier, '_temp_file') and supplier._temp_file:
             try:
                 os.unlink(supplier._temp_file)
-            except:
+            except Exception:
                 pass
     
     return chunk_files
@@ -766,7 +759,7 @@ def split_large_sdf(input_file, chunk_size=50000, output_dir=None):
         if hasattr(supplier, '_temp_file') and supplier._temp_file:
             try:
                 os.unlink(supplier._temp_file)
-            except:
+            except Exception:
                 pass
     
     return chunk_files
@@ -833,7 +826,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
         if hasattr(supplier_preview, '_temp_file') and supplier_preview._temp_file:
             try:
                 os.unlink(supplier_preview._temp_file)
-            except:
+            except Exception:
                 pass
         
         # 添加属性列到表头
@@ -875,13 +868,13 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                 for prop_name in mol.GetPropNames():
                     try:
                         mol_props[prop_name] = mol.GetProp(prop_name)
-                    except:
+                    except Exception:
                         mol_props[prop_name] = ''
                 
                 # 延迟sanitize - 只对需要的分子进行
                 try:
                     Chem.SanitizeMol(mol)
-                except:
+                except Exception:
                     mol_id_counter += 1
                     continue  # 跳过无法sanitize的分子
                 
@@ -889,7 +882,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                 if include_3d and mol.GetNumConformers() == 0:
                     try:
                         AllChem.EmbedMolecule(mol, randomSeed=42)
-                    except:
+                    except Exception:
                         mol_id_counter += 1
                         continue  # 跳过无法生成3D坐标的分子
                 
@@ -945,7 +938,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                                 for prop_name, prop_value in mol_props.items():
                                     try:
                                         mol_copy.SetProp(prop_name, prop_value)
-                                    except:
+                                    except Exception:
                                         pass
                                 
                                 conf_mol_id = f"{{mol_id}}_conf_{{conf_id}}" if mol.GetNumConformers() > 1 else mol_id
@@ -986,7 +979,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                             try:
                                 smiles = Chem.MolToSmiles(mol)
                                 row_data.append(smiles)
-                            except:
+                            except Exception:
                                 row_data.append('')
                         
                         # 添加其他分子属性
@@ -1038,7 +1031,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                             for prop_name, prop_value in mol_props.items():
                                 try:
                                     mol_copy.SetProp(prop_name, prop_value)
-                                except:
+                                except Exception:
                                     pass
                             
                             temp_mols.append(mol_copy)
@@ -1065,7 +1058,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
                                     clean_values.append(float(val) if np.isfinite(val) else np.nan)
                                 else:
                                     clean_values.append(np.nan)
-                            except:
+                            except Exception:
                                 clean_values.append(np.nan)
                         
                         molecule_data[mol_id]['conformer_values'].append(clean_values)
@@ -1138,7 +1131,7 @@ def stream_compute_descriptors(input_file, output_file, config, checkpoint_state
         if hasattr(supplier, '_temp_file') and supplier._temp_file:
             try:
                 os.unlink(supplier._temp_file)
-            except:
+            except Exception:
                 pass
         
         elapsed_time = time.time() - start_time
@@ -1274,12 +1267,12 @@ def main():
                             count = sum(1 for _ in f) - 1  # 减去表头
                         total_processed += count
                         print(f"  已完成块包含 {{count:,}} 个分子")
-                    except:
+                    except Exception:
                         pass
                 # 清理临时分割文件
                 try:
                     os.unlink(chunk_file)
-                except:
+                except Exception:
                     pass
                 continue
             
@@ -1303,7 +1296,7 @@ def main():
                 # 清理临时分割文件
                 try:
                     os.unlink(chunk_file)
-                except:
+                except Exception:
                     pass
             else:
                 print(f"❌ 块 {{i}} 处理失败: {{error}}")
@@ -1394,7 +1387,7 @@ if __name__ == "__main__":
     # 设置执行权限
     try:
         os.chmod(script_path, 0o755)
-    except:
+    except Exception:
         pass
     
     return script_path
@@ -1468,7 +1461,7 @@ exit $EXIT_CODE
     # 设置执行权限
     try:
         os.chmod(shell_script_path, 0o755)
-    except:
+    except Exception:
         pass
     
     return shell_script_path, stdout_log, stderr_log
@@ -1611,7 +1604,7 @@ if selected_folder:
                 'chunk_size': chunk_size if enable_chunking else 50000
             }
             
-            st.info(f"📄 准备生成计算脚本...")
+            st.info("📄 准备生成计算脚本...")
             st.info(f"📊 配置: {num_workers}进程, {aggregation_method}聚合, 3D={include_3d}")
             
             try:
@@ -1631,7 +1624,7 @@ if selected_folder:
                 with st.spinner("生成Python计算脚本..."):
                     generate_descriptor_script(config, file_path, output_path, python_script_path)
                 
-                st.success(f"✅ Python脚本已生成")
+                st.success("✅ Python脚本已生成")
                 
                 # 生成Shell脚本
                 st.info(f"📄 生成Shell执行脚本: {shell_script_path}")
@@ -1640,7 +1633,7 @@ if selected_folder:
                         python_script_path, shell_script_path, log_dir
                     )
                 
-                st.success(f"✅ Shell脚本已生成")
+                st.success("✅ Shell脚本已生成")
                 
                 # 保存关键变量到session_state以供按钮使用（使用绝对路径）
                 st.session_state.script_info = {
@@ -1860,13 +1853,13 @@ if 'running_processes' in st.session_state and st.session_state.running_processe
                             try:
                                 memory_mb = proc.memory_info().rss / 1024 / 1024
                                 st.metric("内存使用", f"{memory_mb:.1f} MB")
-                            except:
+                            except Exception:
                                 st.metric("内存使用", "未知")
                         else:
                             st.metric("状态", "⚪ 已停止")
                     else:
                         st.metric("状态", "⚪ 已停止")
-                except:
+                except Exception:
                     st.metric("状态", "❓ 未知")
             
             with col3:
@@ -1883,7 +1876,7 @@ if 'running_processes' in st.session_state and st.session_state.running_processe
                 # 提供下载按钮
                 with open(output_file, 'rb') as f:
                     st.download_button(
-                        f"📥 下载结果文件",
+                        "📥 下载结果文件",
                         f.read(),
                         file_name=os.path.basename(output_file),
                         mime="text/csv",
