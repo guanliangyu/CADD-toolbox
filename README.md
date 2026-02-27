@@ -191,6 +191,10 @@ conda activate CADD-Toolbox
 mamba env export > my_environment.yml
 ```
 
+#### 环境文件说明
+- `environment.yml`：主环境（含 GPU 计算栈，面向本地/服务器运行）。
+- `environment.ci.yml`：CI 环境（CPU-only，面向 GitHub Actions 稳定构建）。
+
 #### 环境信息查看
 ```bash
 # 查看已安装的包
@@ -201,6 +205,30 @@ conda info
 
 # 查看 GPU 相关包
 conda list | grep -E "(cuda|gpu|rapids)"
+```
+
+### 代码质量与 CI 一致性
+
+为避免本地与 CI 格式规则漂移，建议在本地固定与 CI 相同版本：
+
+```bash
+pip install "ruff==0.15.4" "black==24.2.0"
+```
+
+提交前执行：
+
+```bash
+ruff check .
+black --check --diff .
+```
+
+若失败可自动修复后复检：
+
+```bash
+ruff check . --fix
+black .
+ruff check .
+black --check --diff .
 ```
 
 ## 📊 使用指南
@@ -552,7 +580,9 @@ clustering:
 CADD-toolbox/
 ├── Home.py                    # Streamlit主应用
 ├── create_env_step_by_step.sh # 环境安装脚本
-├── environment.yml            # Conda环境配置
+├── environment.yml            # 主Conda环境（GPU）
+├── environment.ci.yml         # CI环境（CPU-only）
+├── .github/workflows/ci.yml   # GitHub Actions流程
 ├── pages/                     # Streamlit页面
 │   ├── 0_数据处理.py
 │   ├── 1_基础成药性筛选.py
