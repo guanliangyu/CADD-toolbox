@@ -13,10 +13,10 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # 导入工具模块
-from utils.state_utils import (
+from utils.state_utils import (  # noqa: E402
     initialize_session_state,
     display_state_sidebar,
-)  # noqa: E402
+)
 
 # 设置页面标题和配置
 st.set_page_config(
