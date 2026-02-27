@@ -15,6 +15,7 @@ import streamlit as st
 
 try:
     import torch  # type: ignore
+
     TORCH_AVAILABLE = True
     CUDA_AVAILABLE = torch.cuda.is_available()
 except ImportError:
@@ -35,8 +36,7 @@ def list_data_folders():
     if not os.path.exists(DATA_DIR):
         return []
     return sorted(
-        f for f in os.listdir(DATA_DIR)
-        if os.path.isdir(os.path.join(DATA_DIR, f))
+        f for f in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, f))
     )
 
 
@@ -46,10 +46,12 @@ def list_csv(folder):
         return []
     return sorted(f for f in os.listdir(folder_path) if f.endswith(".csv"))
 
+
 def file_info(fp):
-    s = os.path.getsize(fp)/1024/1024
+    s = os.path.getsize(fp) / 1024 / 1024
     m = datetime.fromtimestamp(os.path.getmtime(fp)).strftime("%Y-%m-%d %H:%M:%S")
     return s, m
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 1️⃣  脚本模板生成函数
@@ -509,7 +511,8 @@ fi
 exit $CODE
 """
 
-def generate_subset_py(cfg:dict, inp:str, outp:str, dst:str):
+
+def generate_subset_py(cfg: dict, inp: str, outp: str, dst: str):
     """写 subset_selecting.py 到 dst"""
     py = PY_TEMPLATE
     # 模板本身已经是通用 CLI,无需插值,只写文件
@@ -518,28 +521,44 @@ def generate_subset_py(cfg:dict, inp:str, outp:str, dst:str):
     os.chmod(dst, 0o755)
     return dst
 
-def generate_subset_sh(py_path:str,
-                       inp:str, outp:str, k:int,
-                       metric:str, algo:str,
-                       gpu:bool, fp16:bool,
-                       dst:str, log_dir:str):
+
+def generate_subset_sh(
+    py_path: str,
+    inp: str,
+    outp: str,
+    k: int,
+    metric: str,
+    algo: str,
+    gpu: bool,
+    fp16: bool,
+    dst: str,
+    log_dir: str,
+):
     os.makedirs(log_dir, exist_ok=True)
     flag = "--fp16" if (gpu and fp16) else ("" if gpu else "--cpu")
     # 使用绝对路径替换模板中的文件名
-    sh = SH_TEMPLATE.replace("subset_selecting.py", os.path.basename(py_path)) \
-                    .replace("descriptors.csv",           os.path.abspath(inp)) \
-                    .replace("subset_1000_cosine.csv",    os.path.abspath(outp)) \
-                    .replace("1000",           str(k)) \
-                    .replace("cosine",         metric) \
-                    .replace("greedy",         algo) \
-                    .replace("--fp16", flag if flag else " ")  # 若 --cpu 则留空
+    sh = (
+        SH_TEMPLATE.replace("subset_selecting.py", os.path.basename(py_path))
+        .replace("descriptors.csv", os.path.abspath(inp))
+        .replace("subset_1000_cosine.csv", os.path.abspath(outp))
+        .replace("1000", str(k))
+        .replace("cosine", metric)
+        .replace("greedy", algo)
+        .replace("--fp16", flag if flag else " ")
+    )  # 若 --cpu 则留空
     with open(dst, "w", encoding="utf-8") as f:
         f.write(sh)
     os.chmod(dst, 0o755)
-    return dst, os.path.join(log_dir,
-            f"{os.path.splitext(os.path.basename(outp))[0]}_stdout.log"), \
-           os.path.join(log_dir,
-            f"{os.path.splitext(os.path.basename(outp))[0]}_stderr.log")
+    return (
+        dst,
+        os.path.join(
+            log_dir, f"{os.path.splitext(os.path.basename(outp))[0]}_stdout.log"
+        ),
+        os.path.join(
+            log_dir, f"{os.path.splitext(os.path.basename(outp))[0]}_stderr.log"
+        ),
+    )
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 2️⃣  用户界面 – 参数选择
@@ -565,7 +584,9 @@ st.info(f"📄 大小: {size_mb:.1f} MB   🕒 修改: {mtime}")
 st.subheader("2. 筛选参数")
 
 if not TORCH_AVAILABLE:
-    st.warning("未检测到 PyTorch，脚本将默认使用 CPU 路径。若需 GPU 加速，请先安装带 CUDA 的 PyTorch。")
+    st.warning(
+        "未检测到 PyTorch，脚本将默认使用 CPU 路径。若需 GPU 加速，请先安装带 CUDA 的 PyTorch。"
+    )
 elif not CUDA_AVAILABLE:
     st.info("当前环境未检测到可用 GPU，将以 CPU 模式生成脚本。")
 
@@ -585,42 +606,42 @@ with col1:
         min_value=1,
         value=1000,
         step=100,
-        help="选择最终需要保留的分子数，建议结合下游实验批量设置。"
+        help="选择最终需要保留的分子数，建议结合下游实验批量设置。",
     )
     metric = st.selectbox(
         "距离度量",
         ["euclidean", "manhattan", "cosine"],
-        help="依据描述符特性选择距离度量；对指纹推荐余弦。"
+        help="依据描述符特性选择距离度量；对指纹推荐余弦。",
     )
 with col2:
     algo = st.selectbox(
         "筛选算法",
         ["greedy"],
-        help="当前提供基于最大最小距离的贪心算法，兼顾速度与覆盖度。"
+        help="当前提供基于最大最小距离的贪心算法，兼顾速度与覆盖度。",
     )
     initial = st.selectbox(
         "首个分子策略",
         ["random", "centroid", "first"],
-        help="决定贪心首个样本的选取方式，从而影响后续覆盖范围。"
+        help="决定贪心首个样本的选取方式，从而影响后续覆盖范围。",
     )
 with col3:
     use_gpu = st.checkbox(
         "使用 GPU",
         value=CUDA_AVAILABLE,
         disabled=not CUDA_AVAILABLE,
-        help="检测到可用 GPU 时可启用高速计算；若未安装 GPU 环境则自动关闭。"
+        help="检测到可用 GPU 时可启用高速计算；若未安装 GPU 环境则自动关闭。",
     )
     fp16 = st.checkbox(
         "启用 FP16",
         value=False,
         disabled=not (use_gpu and CUDA_AVAILABLE),
-        help="在 GPU 模式下降低显存占用，建议在精度允许时开启。"
+        help="在 GPU 模式下降低显存占用，建议在精度允许时开启。",
     )
 
 # ──  输出文件名
 st.subheader("3. 输出设置")
 out_default = f"subset_{subset_size}_{metric}_{csv_file}"
-output_csv  = st.text_input("输出文件名", value=out_default)
+output_csv = st.text_input("输出文件名", value=out_default)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 3️⃣  生成脚本
@@ -636,9 +657,17 @@ if st.button("📄 生成脚本", type="primary"):
     cfg = dict()  # 目前 Py 模板无需 cfg
     generate_subset_py(cfg, csv_path, out_path, py_path)
     sh_path, stdout_log, stderr_log = generate_subset_sh(
-        py_path, csv_path, out_path,
-        subset_size, metric, algo, use_gpu, fp16,
-        sh_path, log_dir)
+        py_path,
+        csv_path,
+        out_path,
+        subset_size,
+        metric,
+        algo,
+        use_gpu,
+        fp16,
+        sh_path,
+        log_dir,
+    )
 
     st.success("脚本生成完毕")
     st.code(f"Python: {py_path}\nShell : {sh_path}")
@@ -646,18 +675,18 @@ if st.button("📄 生成脚本", type="primary"):
     # 放入 session_state
     st.session_state.script_info = {
         "python": py_path,
-        "shell" : sh_path,
-        "dir"   : script_dir,
+        "shell": sh_path,
+        "dir": script_dir,
         "stdout": stdout_log,
         "stderr": stderr_log,
         "output": out_path,
-        "name"  : os.path.splitext(os.path.basename(sh_path))[0]
+        "name": os.path.splitext(os.path.basename(sh_path))[0],
     }
 
     with open(py_path, "rb") as f:
         st.download_button("下载 Python 脚本", f, file_name=os.path.basename(py_path))
     with open(sh_path, "rb") as f:
-        st.download_button("下载 Shell 脚本",  f, file_name=os.path.basename(sh_path))
+        st.download_button("下载 Shell 脚本", f, file_name=os.path.basename(sh_path))
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 4️⃣  执行脚本
@@ -675,20 +704,22 @@ if "script_info" in st.session_state:
             abs_shell_path = os.path.abspath(info["shell"])
             abs_work_dir = os.path.abspath(info["dir"])
             proc = subprocess.Popen(
-                ["/bin/bash", abs_shell_path],
-                cwd=abs_work_dir, preexec_fn=os.setsid)
+                ["/bin/bash", abs_shell_path], cwd=abs_work_dir, preexec_fn=os.setsid
+            )
             st.success(f"后台进程已启动 (PID {proc.pid})")
 
             if "running" not in st.session_state:
                 st.session_state.running = []
-            st.session_state.running.append({
-                "pid": proc.pid,
-                "name": info["name"],
-                "start": time.time(),
-                "stdout": info["stdout"],
-                "stderr": info["stderr"],
-                "output": info["output"]
-            })
+            st.session_state.running.append(
+                {
+                    "pid": proc.pid,
+                    "name": info["name"],
+                    "start": time.time(),
+                    "stdout": info["stdout"],
+                    "stderr": info["stderr"],
+                    "output": info["output"],
+                }
+            )
         else:
             st.error("脚本不存在,请重新生成。")
 else:
@@ -700,17 +731,21 @@ else:
 if "running" in st.session_state and st.session_state.running:
     st.subheader("🔄 运行中任务")
     import psutil
+
     for idx, r in enumerate(st.session_state.running):
         with st.expander(f"{r['name']}  (PID {r['pid']})", expanded=False):
-            alive = psutil.pid_exists(r['pid']) and psutil.Process(r['pid']).is_running()
+            alive = (
+                psutil.pid_exists(r["pid"]) and psutil.Process(r["pid"]).is_running()
+            )
             st.markdown(f"**状态**: {'🟢 运行中' if alive else '⚪ 已结束'}")
             st.markdown(f"**运行时间**: {(time.time()-r['start'])/60:.1f} 分钟")
             if os.path.exists(r["output"]):
-                size = os.path.getsize(r["output"])/1024/1024
+                size = os.path.getsize(r["output"]) / 1024 / 1024
                 st.success(f"✅ 已生成输出 ({size:.1f} MB)")
                 with open(r["output"], "rb") as f:
-                    st.download_button("下载结果", f,
-                        file_name=os.path.basename(r["output"]))
+                    st.download_button(
+                        "下载结果", f, file_name=os.path.basename(r["output"])
+                    )
             colA, colB = st.columns(2)
             with colA:
                 if st.button("查看 stdout 尾部", key=f"out{idx}"):

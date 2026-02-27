@@ -49,7 +49,9 @@ def _store_dataset(
     st.session_state[SESSION_KEY_DUB_DF] = df
     st.session_state[SESSION_KEY_DUB_META] = asdict(meta)
     st.session_state[SESSION_KEY_DUB_SOURCE] = meta.source_name
-    st.session_state[SESSION_KEY_DUB_FILE_PATH] = str(file_path) if file_path is not None else None
+    st.session_state[SESSION_KEY_DUB_FILE_PATH] = (
+        str(file_path) if file_path is not None else None
+    )
     st.session_state[SESSION_KEY_DUB_PARTIAL_LOAD] = bool(partial_load)
 
 
@@ -126,8 +128,14 @@ def _render_dataset_summary(df: pd.DataFrame, meta: CsvLoadMeta) -> None:
     st.dataframe(schema_df, use_container_width=True, hide_index=True)
 
     name_lower = [col.lower() for col in df.columns]
-    candidate_smiles = [col for col, lower in zip(df.columns, name_lower) if "smiles" in lower]
-    candidate_id = [col for col, lower in zip(df.columns, name_lower) if lower in {"id", "compound_id", "molecule_id"}]
+    candidate_smiles = [
+        col for col, lower in zip(df.columns, name_lower) if "smiles" in lower
+    ]
+    candidate_id = [
+        col
+        for col, lower in zip(df.columns, name_lower)
+        if lower in {"id", "compound_id", "molecule_id"}
+    ]
     st.info(
         "字段建议: "
         f"SMILES候选列={candidate_smiles if candidate_smiles else '未检测到'}；"
@@ -142,8 +150,7 @@ def _render_target_method_bubble(df: pd.DataFrame) -> None:
     missing_cols = [col for col in (target_col, method_col) if col not in df.columns]
     if missing_cols:
         st.info(
-            "无法绘制气泡图，缺少字段: "
-            + "、".join(f"`{col}`" for col in missing_cols)
+            "无法绘制气泡图，缺少字段: " + "、".join(f"`{col}`" for col in missing_cols)
         )
         return
 
@@ -283,7 +290,9 @@ def _render_column_unification(df: pd.DataFrame) -> pd.DataFrame | None:
         st.warning("分隔符不能为空。")
         return None
 
-    option_df, stats = dub_data.analyze_column_field_options(df[selected_column], delimiter=delimiter)
+    option_df, stats = dub_data.analyze_column_field_options(
+        df[selected_column], delimiter=delimiter
+    )
 
     stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
     with stat_col1:
@@ -311,12 +320,16 @@ def _render_column_unification(df: pd.DataFrame) -> pd.DataFrame | None:
             key="dub_unify_display_rows",
         )
     )
-    st.dataframe(option_df.head(display_rows), use_container_width=True, hide_index=True)
+    st.dataframe(
+        option_df.head(display_rows), use_container_width=True, hide_index=True
+    )
 
     normalized_col_name = re.sub(r"[\s_]+", "", selected_column.strip().lower())
     is_submitted_by_column = normalized_col_name == "submittedby"
     if is_submitted_by_column:
-        st.caption("检测到 `SubmittedBy` 列：将按“每行第一个字段的第一个单词”进行推荐标准化。")
+        st.caption(
+            "检测到 `SubmittedBy` 列：将按“每行第一个字段的第一个单词”进行推荐标准化。"
+        )
 
     unify_mode_label = st.radio(
         "统一方式",
@@ -371,21 +384,34 @@ def _render_column_unification(df: pd.DataFrame) -> pd.DataFrame | None:
             st.session_state[SESSION_KEY_DUB_DF] = result_df
             _sync_meta_shape(result_df)
 
-            st.success(f"已完成统一：输出列 `{output_column}`，填充 {filled_rows:,}/{len(result_df):,} 行。")
+            st.success(
+                f"已完成统一：输出列 `{output_column}`，填充 {filled_rows:,}/{len(result_df):,} 行。"
+            )
 
             source_path_value = st.session_state.get(SESSION_KEY_DUB_FILE_PATH)
             if source_path_value:
                 source_path = Path(source_path_value)
-                safe_col_name = re.sub(r"[^A-Za-z0-9._-]+", "_", output_column).strip("_") or "normalized"
-                output_path = source_path.with_name(f"{source_path.stem}_{safe_col_name}.csv")
+                safe_col_name = (
+                    re.sub(r"[^A-Za-z0-9._-]+", "_", output_column).strip("_")
+                    or "normalized"
+                )
+                output_path = source_path.with_name(
+                    f"{source_path.stem}_{safe_col_name}.csv"
+                )
                 result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
                 st.success(f"已导出 CSV: `{output_path.as_posix()}`")
                 if st.session_state.get(SESSION_KEY_DUB_PARTIAL_LOAD):
-                    st.warning("当前数据来自预览读取，导出文件仅包含已加载行。若需全量导出，请先使用全量读取。")
+                    st.warning(
+                        "当前数据来自预览读取，导出文件仅包含已加载行。若需全量导出，请先使用全量读取。"
+                    )
             else:
                 st.warning("当前数据缺少来源文件路径，未自动导出 CSV。")
 
-            preview_cols = [selected_column] if output_column == selected_column else [selected_column, output_column]
+            preview_cols = (
+                [selected_column]
+                if output_column == selected_column
+                else [selected_column, output_column]
+            )
             st.dataframe(
                 result_df[preview_cols].head(100),
                 use_container_width=True,
@@ -414,9 +440,13 @@ with upload_tab:
         )
     with folder_col2:
         st.write("")
-        if st.button("创建文件夹", key="dub_create_folder_btn", use_container_width=True):
+        if st.button(
+            "创建文件夹", key="dub_create_folder_btn", use_container_width=True
+        ):
             try:
-                created_folder = dub_data.create_data_subfolder(new_folder_name, DEFAULT_DATA_DIR)
+                created_folder = dub_data.create_data_subfolder(
+                    new_folder_name, DEFAULT_DATA_DIR
+                )
                 st.session_state["dub_target_folder"] = created_folder.name
                 st.success(f"已创建文件夹: data/{created_folder.name}")
                 st.rerun()
@@ -482,7 +512,9 @@ with upload_tab:
         )
         requested_nrows = preview_nrows if read_scope == "预览模式（推荐）" else None
 
-        if st.button("保存并读取 CSV", key="save_and_load_uploaded_dub_csv", type="primary"):
+        if st.button(
+            "保存并读取 CSV", key="save_and_load_uploaded_dub_csv", type="primary"
+        ):
             try:
                 with st.spinner("正在保存并读取文件..."):
                     saved_path = dub_data.save_uploaded_csv_to_data(
@@ -492,7 +524,9 @@ with upload_tab:
                         filename=save_file_name,
                         overwrite=overwrite_existing,
                     )
-                    loaded_df, loaded_meta = dub_data.load_csv_from_path(saved_path, nrows=requested_nrows)
+                    loaded_df, loaded_meta = dub_data.load_csv_from_path(
+                        saved_path, nrows=requested_nrows
+                    )
 
                 _store_dataset(
                     loaded_df,
@@ -521,12 +555,16 @@ with local_tab:
         if not csv_files:
             st.info(f"`{selected_folder}` 下没有 CSV 文件。")
         else:
-            selected_csv = st.selectbox("选择 CSV 文件", csv_files, key="dub_csv_select")
+            selected_csv = st.selectbox(
+                "选择 CSV 文件", csv_files, key="dub_csv_select"
+            )
             if st.button("读取所选 CSV", key="load_selected_dub_csv", type="primary"):
                 try:
                     file_path = DEFAULT_DATA_DIR / selected_folder / selected_csv
                     loaded_df, loaded_meta = dub_data.load_csv_from_path(file_path)
-                    _store_dataset(loaded_df, loaded_meta, file_path=file_path, partial_load=False)
+                    _store_dataset(
+                        loaded_df, loaded_meta, file_path=file_path, partial_load=False
+                    )
                     st.success(f"已成功读取文件: {selected_folder}/{selected_csv}")
                 except Exception as exc:
                     st.error(f"读取本地 CSV 失败: {exc}")

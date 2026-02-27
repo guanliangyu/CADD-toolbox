@@ -1,6 +1,7 @@
 """
 构象动力学优化页面 - 使用OpenMM进行分子动力学优化
 """
+
 import streamlit as st
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolAlign
@@ -15,9 +16,13 @@ import sys
 import subprocess
 
 # 导入后台优化工具
-sys.path.append('.')
+sys.path.append(".")
 try:
-    from utils.background_optimizer import run_background_optimization, check_background_status
+    from utils.background_optimizer import (
+        run_background_optimization,
+        check_background_status,
+    )
+
     BACKGROUND_OPTIMIZER_AVAILABLE = True
 except ImportError:
     BACKGROUND_OPTIMIZER_AVAILABLE = False
@@ -26,6 +31,7 @@ except ImportError:
 # OpenMM相关导入
 try:
     import openmm
+
     OPENMM_AVAILABLE = True
 except ImportError:
     OPENMM_AVAILABLE = False
@@ -35,28 +41,28 @@ PREVIEW_SIZE = 10
 LARGE_FILE_THRESHOLD = 100 * 1024 * 1024
 
 # 初始化会话状态
-if 'last_processed_file_identifier' not in st.session_state:
+if "last_processed_file_identifier" not in st.session_state:
     st.session_state.last_processed_file_identifier = None
-if 'scan_results_valid' not in st.session_state:
+if "scan_results_valid" not in st.session_state:
     st.session_state.scan_results_valid = False
-if 'total_potential_mols_cache' not in st.session_state:
+if "total_potential_mols_cache" not in st.session_state:
     st.session_state.total_potential_mols_cache = 0
-if 'preview_data_cache' not in st.session_state:
+if "preview_data_cache" not in st.session_state:
     st.session_state.preview_data_cache = []
-if 'initial_scan_successful_cache' not in st.session_state:
+if "initial_scan_successful_cache" not in st.session_state:
     st.session_state.initial_scan_successful_cache = False
-if 'saved_file_path' not in st.session_state:
+if "saved_file_path" not in st.session_state:
     st.session_state.saved_file_path = None
-if 'saved_work_dir' not in st.session_state:
+if "saved_work_dir" not in st.session_state:
     st.session_state.saved_work_dir = None
-if 'file_size_cache' not in st.session_state:
+if "file_size_cache" not in st.session_state:
     st.session_state.file_size_cache = None
 # 新增缓存字段
-if 'file_hash_cache_opt' not in st.session_state:
+if "file_hash_cache_opt" not in st.session_state:
     st.session_state.file_hash_cache_opt = None
-if 'scan_timestamp_cache_opt' not in st.session_state:
+if "scan_timestamp_cache_opt" not in st.session_state:
     st.session_state.scan_timestamp_cache_opt = None
-if 'manual_scan_requested' not in st.session_state:
+if "manual_scan_requested" not in st.session_state:
     st.session_state.manual_scan_requested = False
 
 # 确保数据目录存在
@@ -64,22 +70,24 @@ DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
+
 def get_file_size(file_path_or_obj):
     """获取文件大小"""
     if isinstance(file_path_or_obj, str):
         if os.path.exists(file_path_or_obj):
             return os.path.getsize(file_path_or_obj)
     else:
-        if hasattr(file_path_or_obj, 'size'):
+        if hasattr(file_path_or_obj, "size"):
             return file_path_or_obj.size
-        elif hasattr(file_path_or_obj, 'getvalue'):
+        elif hasattr(file_path_or_obj, "getvalue"):
             return len(file_path_or_obj.getvalue())
     return 0
+
 
 def get_file_hash_opt(file_path_or_obj):
     """获取文件的简单哈希值用于缓存验证"""
     import hashlib
-    
+
     if isinstance(file_path_or_obj, str):
         if os.path.exists(file_path_or_obj):
             # 对于文件路径，使用文件修改时间+大小作为哈希
@@ -88,65 +96,78 @@ def get_file_hash_opt(file_path_or_obj):
             return hashlib.md5(hash_input.encode()).hexdigest()
     else:
         # 对于上传文件，使用名称+大小作为哈希
-        if hasattr(file_path_or_obj, 'name') and hasattr(file_path_or_obj, 'size'):
+        if hasattr(file_path_or_obj, "name") and hasattr(file_path_or_obj, "size"):
             hash_input = f"{file_path_or_obj.name}_{file_path_or_obj.size}"
             return hashlib.md5(hash_input.encode()).hexdigest()
     return None
+
 
 def is_cache_valid_opt(file_path_or_obj):
     """检查优化页面的缓存是否有效"""
     current_hash = get_file_hash_opt(file_path_or_obj)
     if not current_hash:
         return False
-    
+
     # 检查是否有缓存的哈希值
     cached_hash = st.session_state.file_hash_cache_opt
     cached_identifier = st.session_state.last_processed_file_identifier
-    
+
     # 当前文件标识符
     if isinstance(file_path_or_obj, str):
         current_identifier = file_path_or_obj
     else:
-        current_identifier = file_path_or_obj.name if hasattr(file_path_or_obj, 'name') else str(file_path_or_obj)
-    
-    return (current_hash == cached_hash and 
-            current_identifier == cached_identifier and 
-            st.session_state.scan_results_valid)
+        current_identifier = (
+            file_path_or_obj.name
+            if hasattr(file_path_or_obj, "name")
+            else str(file_path_or_obj)
+        )
+
+    return (
+        current_hash == cached_hash
+        and current_identifier == cached_identifier
+        and st.session_state.scan_results_valid
+    )
+
 
 def generate_work_folder_name(filename):
     """生成工作文件夹名称：日期+随机码"""
     date_str = datetime.now().strftime("%Y%m%d")
     random_code = str(uuid.uuid4())[:8]
     base_name = os.path.splitext(filename)[0]
-    sanitized_base = "".join(c if c.isalnum() or c in (' ', '_', '-') else '_' for c in base_name).strip()
+    sanitized_base = "".join(
+        c if c.isalnum() or c in (" ", "_", "-") else "_" for c in base_name
+    ).strip()
     return f"{date_str}_{sanitized_base}_{random_code}"
+
 
 def save_uploaded_file(uploaded_file):
     """保存上传的文件到data目录"""
     if not uploaded_file:
         return None, None
-    
+
     folder_name = generate_work_folder_name(uploaded_file.name)
     work_dir = os.path.join(DATA_DIR, folder_name)
-    
+
     try:
         os.makedirs(work_dir, exist_ok=True)
         file_path = os.path.join(work_dir, uploaded_file.name)
-        
+
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        
+
         st.success(f"文件 '{uploaded_file.name}' 已保存到: {work_dir}")
         return file_path, work_dir
     except Exception as e:
         st.error(f"保存文件时出错: {e}")
         return None, None
 
+
 def list_data_folders():
     """列出data目录下的所有文件夹"""
     if not os.path.exists(DATA_DIR):
         return []
     return [d for d in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, d))]
+
 
 def list_files_in_folder(folder_name):
     """列出指定文件夹中的文件"""
@@ -156,17 +177,22 @@ def list_files_in_folder(folder_name):
     if not os.path.isdir(folder_path):
         return []
     # 只列出SDF文件
-    return [f for f in os.listdir(folder_path) if f.lower().endswith('.sdf') and os.path.isfile(os.path.join(folder_path, f))]
+    return [
+        f
+        for f in os.listdir(folder_path)
+        if f.lower().endswith(".sdf") and os.path.isfile(os.path.join(folder_path, f))
+    ]
+
 
 def smart_scan_sdf_with_progress(file_to_scan, current_filename):
     """智能扫描SDF文件，使用进度条显示进度，避免信息刷屏"""
-    
+
     file_size = get_file_size(file_to_scan)
-    
+
     # 显示文件信息
     size_mb = file_size / (1024 * 1024)
     st.info(f"📁 文件大小: {size_mb:.1f} MB")
-    
+
     # 创建进度显示区域
     progress_container = st.container()
     with progress_container:
@@ -179,22 +205,24 @@ def smart_scan_sdf_with_progress(file_to_scan, current_filename):
             valid_metric = st.empty()
         with scan_metrics[2]:
             speed_metric = st.empty()
-    
+
     # 读取SDF文件
     if isinstance(file_to_scan, str):
-        supplier = Chem.ForwardSDMolSupplier(file_to_scan, removeHs=False, sanitize=True)
+        supplier = Chem.ForwardSDMolSupplier(
+            file_to_scan, removeHs=False, sanitize=True
+        )
     else:
-        if hasattr(file_to_scan, 'seek'):
+        if hasattr(file_to_scan, "seek"):
             file_to_scan.seek(0)
         sdf_stream = io.BytesIO(file_to_scan.getvalue())
         supplier = Chem.ForwardSDMolSupplier(sdf_stream, removeHs=False, sanitize=True)
-    
+
     # 计算分子数量和预览
     preview_smiles = []
     total_conformers = 0
     start_time = time.time()
     last_update_time = start_time
-    
+
     # 对于大文件，先估算总数
     estimated_total = None
     if file_size > LARGE_FILE_THRESHOLD and isinstance(file_to_scan, str):
@@ -204,7 +232,7 @@ def smart_scan_sdf_with_progress(file_to_scan, current_filename):
             scan_status.info(f"🔍 大文件检测：估算约 {estimated_total:,} 个分子")
         except Exception:
             pass
-    
+
     # 扫描分子
     for i, mol in enumerate(supplier):
         if mol is not None:
@@ -212,12 +240,12 @@ def smart_scan_sdf_with_progress(file_to_scan, current_filename):
             # 只收集前面的分子用于预览
             if i < PREVIEW_SIZE:
                 preview_smiles.append(Chem.MolToSmiles(mol))
-        
+
         current_time = time.time()
         # 限制更新频率，每0.5秒或每1000个分子更新一次
         if (current_time - last_update_time > 0.5) or ((i + 1) % 1000 == 0):
             elapsed_time = current_time - start_time
-            
+
             # 更新进度
             if estimated_total:
                 progress = min((i + 1) / estimated_total, 1.0)
@@ -226,59 +254,64 @@ def smart_scan_sdf_with_progress(file_to_scan, current_filename):
                 # 对小文件，无法估算，使用心跳效果
                 progress = (i % 100) / 100
                 scan_progress_bar.progress(progress)
-            
+
             # 更新指标
             scanned_metric.metric("已扫描", f"{i + 1:,}")
             valid_metric.metric("有效分子", f"{total_conformers:,}")
-            
+
             if elapsed_time > 0:
                 speed = (i + 1) / elapsed_time
                 speed_metric.metric("扫描速度", f"{speed:.0f}/秒")
-            
+
             # 更新状态
             if estimated_total:
-                scan_status.info(f"🔍 扫描进度: {i + 1:,}/{estimated_total:,} ({progress*100:.1f}%)")
+                scan_status.info(
+                    f"🔍 扫描进度: {i + 1:,}/{estimated_total:,} ({progress*100:.1f}%)"
+                )
             else:
                 scan_status.info(f"🔍 正在扫描: {i + 1:,} 个条目")
-            
+
             last_update_time = current_time
-    
+
     # 完成扫描
     scan_progress_bar.progress(1.0)
     elapsed_time = time.time() - start_time
-    
-    scan_status.success(f"✅ 扫描完成：找到 {total_conformers:,} 个构象 (耗时 {elapsed_time:.1f}秒)")
+
+    scan_status.success(
+        f"✅ 扫描完成：找到 {total_conformers:,} 个构象 (耗时 {elapsed_time:.1f}秒)"
+    )
     scanned_metric.metric("已扫描", f"{i + 1:,}")
     valid_metric.metric("有效分子", f"{total_conformers:,}")
     if elapsed_time > 0:
         speed = (i + 1) / elapsed_time
         speed_metric.metric("平均速度", f"{speed:.0f}/秒")
-    
+
     return {
-        'total_conformers': total_conformers,
-        'preview_smiles': preview_smiles,
-        'scan_successful': total_conformers > 0,
-        'file_size': file_size
+        "total_conformers": total_conformers,
+        "preview_smiles": preview_smiles,
+        "scan_successful": total_conformers > 0,
+        "file_size": file_size,
     }
+
 
 def preprocess_molecule(mol):
     """预处理分子，确保格式正确"""
     try:
         if mol is None:
             return None
-            
+
         # 保存原始分子的属性
         original_props = {}
         for prop_name in mol.GetPropNames():
             original_props[prop_name] = mol.GetProp(prop_name)
-        
+
         # 保存原始分子名称
-        original_name = mol.GetProp('_Name') if mol.HasProp('_Name') else None
-        
+        original_name = mol.GetProp("_Name") if mol.HasProp("_Name") else None
+
         # 检查是否有3D坐标 - 在添加氢之前检查
         if mol.GetNumConformers() == 0:
             return None
-            
+
         # 检查坐标有效性
         try:
             conf = mol.GetConformer()
@@ -288,31 +321,32 @@ def preprocess_molecule(mol):
                     return None
         except Exception:
             return None
-        
+
         # 创建分子副本，移除氢原子再重新添加以确保正确的氢原子位置
         mol_copy = Chem.Mol(mol)
-        
+
         # 进行基本的分子清理
         try:
             Chem.SanitizeMol(mol_copy)
         except Exception:
             return None
-        
+
         # 验证分子结构
         if mol_copy.GetNumAtoms() == 0:
             return None
-        
+
         # 恢复所有原始属性
         for prop_name, prop_value in original_props.items():
             mol_copy.SetProp(prop_name, prop_value)
-        
+
         # 恢复原始名称
         if original_name is not None:
-            mol_copy.SetProp('_Name', original_name)
-            
+            mol_copy.SetProp("_Name", original_name)
+
         return mol_copy
     except Exception:
         return None
+
 
 def mol_to_pdb_string(mol, conf_id=0):
     """将RDKit分子转换为PDB字符串"""
@@ -322,28 +356,31 @@ def mol_to_pdb_string(mol, conf_id=0):
     except Exception:
         return None
 
-def optimize_molecule_with_rdkit_and_openmm(mol, conf_id=0, steps=1000, temperature=300, use_gpu=True):
+
+def optimize_molecule_with_rdkit_and_openmm(
+    mol, conf_id=0, steps=1000, temperature=300, use_gpu=True
+):
     """使用RDKit进行初步优化，然后可选择性使用OpenMM进行精确优化"""
     try:
         # 首先使用RDKit的MMFF力场进行优化
         mol_copy = Chem.Mol(mol)
-        
+
         # 保留原始分子的所有属性和ID
         for prop_name in mol.GetPropNames():
             mol_copy.SetProp(prop_name, mol.GetProp(prop_name))
-        
+
         # 如果原始分子有名称（_Name），也要保留
-        if mol.HasProp('_Name'):
-            mol_copy.SetProp('_Name', mol.GetProp('_Name'))
-        
+        if mol.HasProp("_Name"):
+            mol_copy.SetProp("_Name", mol.GetProp("_Name"))
+
         # 添加氢原子并保留3D坐标
         mol_with_h = Chem.AddHs(mol_copy, addCoords=True)
-        
+
         # 检查是否成功添加氢原子
         if mol_with_h is None or mol_with_h.GetNumConformers() == 0:
             # 如果添加氢原子失败，尝试直接优化原分子
             mol_with_h = mol_copy
-        
+
         # 使用MMFF94进行优化
         try:
             mmff_props = AllChem.MMFFGetMoleculeProperties(mol_with_h)
@@ -351,13 +388,13 @@ def optimize_molecule_with_rdkit_and_openmm(mol, conf_id=0, steps=1000, temperat
                 ff = AllChem.MMFFGetMoleculeForceField(mol_with_h, mmff_props)
                 if ff is not None:
                     convergence_result = ff.Minimize(maxIts=steps)
-                    
+
                     # 如果添加了氢原子，需要将坐标映射回原分子
                     if mol_with_h.GetNumAtoms() != mol_copy.GetNumAtoms():
                         # 移除氢原子，更新原始分子坐标
                         conf_with_h = mol_with_h.GetConformer()
                         conf_orig = mol_copy.GetConformer(conf_id)
-                        
+
                         heavy_idx = 0
                         for i in range(mol_with_h.GetNumAtoms()):
                             atom = mol_with_h.GetAtomWithIdx(i)
@@ -369,24 +406,47 @@ def optimize_molecule_with_rdkit_and_openmm(mol, conf_id=0, steps=1000, temperat
                     else:
                         # 没有添加氢原子，直接使用优化后的坐标
                         mol_copy = mol_with_h
-                    
-                    return {'mol': mol_copy, 'success': True, 'message': f"MMFF94优化成功(收敛:{convergence_result})"}
-                else:
-                    return {'mol': None, 'success': False, 'message': "无法创建MMFF94力场"}
-            else:
-                return {'mol': None, 'success': False, 'message': "无法获取MMFF94分子属性"}
-        except Exception as e:
-            return {'mol': None, 'success': False, 'message': f"MMFF94优化失败: {str(e)}"}
-            
-    except Exception as e:
-        return {'mol': None, 'success': False, 'message': f"优化过程异常: {str(e)}"}
 
-def optimize_molecule_with_openmm(mol, conf_id=0, steps=1000, temperature=300, use_gpu=True):
+                    return {
+                        "mol": mol_copy,
+                        "success": True,
+                        "message": f"MMFF94优化成功(收敛:{convergence_result})",
+                    }
+                else:
+                    return {
+                        "mol": None,
+                        "success": False,
+                        "message": "无法创建MMFF94力场",
+                    }
+            else:
+                return {
+                    "mol": None,
+                    "success": False,
+                    "message": "无法获取MMFF94分子属性",
+                }
+        except Exception as e:
+            return {
+                "mol": None,
+                "success": False,
+                "message": f"MMFF94优化失败: {str(e)}",
+            }
+
+    except Exception as e:
+        return {"mol": None, "success": False, "message": f"优化过程异常: {str(e)}"}
+
+
+def optimize_molecule_with_openmm(
+    mol, conf_id=0, steps=1000, temperature=300, use_gpu=True
+):
     """使用优化后的策略：RDKit + OpenMM (备用)"""
     # 主要使用RDKit的MMFF力场进行优化
-    return optimize_molecule_with_rdkit_and_openmm(mol, conf_id, steps, temperature, use_gpu)
+    return optimize_molecule_with_rdkit_and_openmm(
+        mol, conf_id, steps, temperature, use_gpu
+    )
+
 
 # 删除了optimize_single_molecule函数，改用ThreadPoolExecutor中的内联函数
+
 
 def calculate_rmsd(mol1, mol2, conf_id1=0, conf_id2=0):
     """计算两个构象之间的RMSD"""
@@ -394,12 +454,13 @@ def calculate_rmsd(mol1, mol2, conf_id1=0, conf_id2=0):
         rmsd = rdMolAlign.AlignMol(mol1, mol2, prbCid=conf_id1, refCid=conf_id2)
         return rmsd
     except Exception:
-        return float('inf')
+        return float("inf")
+
 
 def calculate_rmsd_batch(args):
     """批量计算RMSD，用于并行处理"""
     mol_idx, mol, existing_mols, threshold = args
-    
+
     try:
         for existing_idx, existing_mol in existing_mols:
             if existing_mol is None:
@@ -413,6 +474,7 @@ def calculate_rmsd_batch(args):
         return mol_idx, True, None, None
     except Exception:
         return mol_idx, True, None, None  # 错误时当作独特构象
+
 
 def get_molecule_identifier(mol):
     """获取分子的唯一标识符（canonical SMILES）"""
@@ -428,41 +490,47 @@ def get_molecule_identifier(mol):
         except Exception:
             return f"mol_{id(mol)}"  # 最后的回退方案
 
+
 def group_molecules_by_structure(optimized_mols):
     """按分子结构分组"""
     groups = {}
-    
+
     for i, mol in enumerate(optimized_mols):
         if mol is None:
             continue
-            
+
         mol_id = get_molecule_identifier(mol)
         if mol_id not in groups:
             groups[mol_id] = []
         groups[mol_id].append((i, mol))
-    
+
     return groups
 
-def merge_similar_conformers_parallel(optimized_mols, rmsd_threshold=0.5, use_parallel=True, max_workers=None):
+
+def merge_similar_conformers_parallel(
+    optimized_mols, rmsd_threshold=0.5, use_parallel=True, max_workers=None
+):
     """高效并行合并相似构象 - 按分子结构分组处理"""
     if not optimized_mols:
         return [], []
-    
+
     # 按分子结构分组
     mol_groups = group_molecules_by_structure(optimized_mols)
-    
+
     if not mol_groups:
         return [], []
-    
+
     all_unique_mols = []
     all_unique_indices = []
-    
+
     # 统计信息
     total_input_conformers = len([mol for mol in optimized_mols if mol is not None])
     total_groups = len(mol_groups)
-    
-    print(f"📊 分子结构分组: {total_input_conformers} 个构象 → {total_groups} 个不同分子结构")
-    
+
+    print(
+        f"📊 分子结构分组: {total_input_conformers} 个构象 → {total_groups} 个不同分子结构"
+    )
+
     # 对每个分子结构组分别处理
     for mol_id, group_mols in mol_groups.items():
         if len(group_mols) == 1:
@@ -470,58 +538,73 @@ def merge_similar_conformers_parallel(optimized_mols, rmsd_threshold=0.5, use_pa
             idx, mol = group_mols[0]
             all_unique_mols.append(mol)
             all_unique_indices.append(idx)
-            print(f"  📂 {mol_id[:50]}{'...' if len(mol_id) > 50 else ''}: 1 → 1 构象 (单个构象)")
+            print(
+                f"  📂 {mol_id[:50]}{'...' if len(mol_id) > 50 else ''}: 1 → 1 构象 (单个构象)"
+            )
             continue
-        
+
         # 提取该组的分子和索引
         group_indices = [idx for idx, mol in group_mols]
         group_molecules = [mol for idx, mol in group_mols]
-        
+
         # 计算该组内的比较次数
         group_comparisons = len(group_molecules) * (len(group_molecules) - 1) // 2
-        
+
         # 决定是否对该组使用并行处理
-        use_parallel_for_group = use_parallel and group_comparisons >= 1000  # 降低阈值，因为已经分组
-        
+        use_parallel_for_group = (
+            use_parallel and group_comparisons >= 1000
+        )  # 降低阈值，因为已经分组
+
         # 初始化变量以避免作用域问题
         group_unique = []
         group_unique_global_indices = []
-        
+
         if use_parallel_for_group:
             # 使用并行处理该组
-            group_unique, group_unique_local_indices = merge_similar_conformers_parallel_impl(
-                list(enumerate(group_molecules)), rmsd_threshold, max_workers
+            group_unique, group_unique_local_indices = (
+                merge_similar_conformers_parallel_impl(
+                    list(enumerate(group_molecules)), rmsd_threshold, max_workers
+                )
             )
             # 将本地索引转换为全局索引
-            group_unique_global_indices = [group_indices[local_idx] for local_idx in group_unique_local_indices]
+            group_unique_global_indices = [
+                group_indices[local_idx] for local_idx in group_unique_local_indices
+            ]
         else:
             # 使用串行处理该组
-            group_unique, group_unique_global_indices = merge_similar_conformers_serial_group(
-                group_molecules, group_indices, rmsd_threshold
+            group_unique, group_unique_global_indices = (
+                merge_similar_conformers_serial_group(
+                    group_molecules, group_indices, rmsd_threshold
+                )
             )
-        
+
         all_unique_mols.extend(group_unique)
         all_unique_indices.extend(group_unique_global_indices)
-        
-        print(f"  📂 {mol_id[:50]}{'...' if len(mol_id) > 50 else ''}: {len(group_molecules)} → {len(group_unique)} 构象")
-    
+
+        print(
+            f"  📂 {mol_id[:50]}{'...' if len(mol_id) > 50 else ''}: {len(group_molecules)} → {len(group_unique)} 构象"
+        )
+
     return all_unique_mols, all_unique_indices
 
-def merge_similar_conformers_serial_group(group_molecules, group_indices, rmsd_threshold=0.5):
+
+def merge_similar_conformers_serial_group(
+    group_molecules, group_indices, rmsd_threshold=0.5
+):
     """串行合并单个分子结构组内的相似构象"""
     if not group_molecules:
         return [], []
-    
+
     if len(group_molecules) == 1:
         return group_molecules, group_indices
-    
+
     unique_mols = []
     unique_indices = []
-    
+
     for i, mol in enumerate(group_molecules):
         if mol is None:
             continue
-            
+
         is_unique = True
         for existing_mol in unique_mols:
             try:
@@ -531,22 +614,23 @@ def merge_similar_conformers_serial_group(group_molecules, group_indices, rmsd_t
                     break
             except Exception:
                 continue
-        
+
         if is_unique:
             unique_mols.append(mol)
             unique_indices.append(group_indices[i])
-    
+
     return unique_mols, unique_indices
+
 
 def merge_similar_conformers_serial(optimized_mols, rmsd_threshold=0.5):
     """串行版本的构象合并（优化版）"""
     unique_mols = []
     unique_indices = []
-    
+
     for i, mol in enumerate(optimized_mols):
         if mol is None:
             continue
-            
+
         is_unique = True
         for unique_mol in unique_mols:
             if unique_mol is None:
@@ -558,51 +642,57 @@ def merge_similar_conformers_serial(optimized_mols, rmsd_threshold=0.5):
                     break
             except Exception:
                 continue
-        
+
         if is_unique:
             unique_mols.append(mol)
             unique_indices.append(i)
-    
+
     return unique_mols, unique_indices
 
-def merge_similar_conformers_parallel_impl(valid_mols, rmsd_threshold, max_workers=None):
+
+def merge_similar_conformers_parallel_impl(
+    valid_mols, rmsd_threshold, max_workers=None
+):
     """并行实现的构象合并"""
-    
+
     if max_workers is None:
         max_workers = min(8, multiprocessing.cpu_count())
-    
+
     unique_mols = []
     unique_indices = []
-    
+
     # 分批处理以控制内存使用
     batch_size = min(100, max(10, len(valid_mols) // max_workers))
-    
+
     for batch_start in range(0, len(valid_mols), batch_size):
         batch_end = min(batch_start + batch_size, len(valid_mols))
         batch_mols = valid_mols[batch_start:batch_end]
-        
+
         # 为当前批次准备参数
         existing_unique = list(enumerate(unique_mols))
-        
+
         if existing_unique:
             # 并行计算当前批次与已有独特构象的RMSD
             process_args = [
                 (orig_idx, mol, existing_unique, rmsd_threshold)
                 for orig_idx, mol in batch_mols
             ]
-            
+
             try:
                 from concurrent.futures import ThreadPoolExecutor
+
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     results = list(executor.map(calculate_rmsd_batch, process_args))
-                
+
                 # 处理结果
                 for mol_idx, is_unique, rmsd_val, _ in results:
                     if is_unique:
-                        mol = next(mol for orig_idx, mol in batch_mols if orig_idx == mol_idx)
+                        mol = next(
+                            mol for orig_idx, mol in batch_mols if orig_idx == mol_idx
+                        )
                         unique_mols.append(mol)
                         unique_indices.append(mol_idx)
-                        
+
             except Exception:
                 # 并行失败时回退到串行
                 for orig_idx, mol in batch_mols:
@@ -633,32 +723,37 @@ def merge_similar_conformers_parallel_impl(valid_mols, rmsd_threshold, max_worke
                 if is_unique:
                     unique_mols.append(mol)
                     unique_indices.append(orig_idx)
-    
+
     return unique_mols, unique_indices
+
 
 # 为了向后兼容，保留原函数名
 def merge_similar_conformers(optimized_mols, rmsd_threshold=0.5):
     """合并相似的构象（兼容性包装）"""
-    return merge_similar_conformers_parallel(optimized_mols, rmsd_threshold, use_parallel=True)
+    return merge_similar_conformers_parallel(
+        optimized_mols, rmsd_threshold, use_parallel=True
+    )
+
 
 def mols_to_sdf_string(mols_with_conformers):
     """将分子列表转换为SDF字符串"""
     output = io.StringIO()
     sdf_writer = Chem.SDWriter(output)
-    
+
     for mol in mols_with_conformers:
         if mol:
             sdf_writer.write(mol)
-    
+
     sdf_writer.flush()
     sdf_writer.close()
     sdf_string = output.getvalue()
     output.close()
     return sdf_string
 
+
 def generate_optimization_script(input_file, output_file, log_file, config):
     """生成独立的多进程优化Python脚本"""
-    
+
     script_content = '''#!/usr/bin/env python3
 """
 独立的多进程分子构象优化脚本
@@ -980,18 +1075,17 @@ if __name__ == "__main__":
             f.write(f"ERROR: {{str(e)}}\\n")
         sys.exit(1)
 '''.format(
-        log_file=log_file,
-        config=config,
-        input_file=input_file,
-        output_file=output_file
+        log_file=log_file, config=config, input_file=input_file, output_file=output_file
     )
-    
+
     return script_content
+
 
 st.set_page_config(page_title="构象动力学优化", layout="wide")
 st.title("🔬 构象动力学优化")
 
-st.markdown("""
+st.markdown(
+    """
 使用高性能分子力场进行构象优化。支持并行处理，自动合并相似构象。
 
 ⚡ **高性能优化**: 使用RDKit MMFF94力场进行快速优化  
@@ -999,7 +1093,8 @@ st.markdown("""
 🧬 **智能分组**: 按分子结构分组，避免无意义比较  
 🎯 **高效合并**: 基于RMSD自动识别并合并相似构象  
 📊 **批量处理**: 支持处理大型分子库
-""")
+"""
+)
 
 # 检查优化环境
 cpu_count = multiprocessing.cpu_count()
@@ -1009,12 +1104,12 @@ st.info(f"💻 检测到 {cpu_count} 个CPU核心，支持并行优化")
 gpu_available = False
 if OPENMM_AVAILABLE:
     try:
-        platform = openmm.Platform.getPlatformByName('CUDA')
+        platform = openmm.Platform.getPlatformByName("CUDA")
         gpu_available = True
         st.success("🚀 OpenMM + GPU (CUDA) 可用作高级选项")
     except Exception:
         try:
-            platform = openmm.Platform.getPlatformByName('OpenCL') 
+            platform = openmm.Platform.getPlatformByName("OpenCL")
             gpu_available = True
             st.success("🚀 OpenMM + GPU (OpenCL) 可用作高级选项")
         except Exception:
@@ -1024,9 +1119,7 @@ if OPENMM_AVAILABLE:
 st.subheader("1. 选择输入方式")
 
 input_method = st.radio(
-    "选择输入方式:",
-    ("上传新文件", "使用已保存文件"),
-    horizontal=True
+    "选择输入方式:", ("上传新文件", "使用已保存文件"), horizontal=True
 )
 
 uploaded_file = None
@@ -1036,24 +1129,26 @@ current_filename = None
 
 if input_method == "上传新文件":
     uploaded_file = st.file_uploader(
-        "上传SDF文件",
-        type=["sdf"],
-        help="请上传包含3D构象的SDF文件"
+        "上传SDF文件", type=["sdf"], help="请上传包含3D构象的SDF文件"
     )
-    
+
     if uploaded_file:
         current_filename = uploaded_file.name
-        
+
         # 如果上传了不同的文件，清除之前的保存状态
-        if (st.session_state.saved_file_path and 
-            os.path.basename(st.session_state.saved_file_path) != uploaded_file.name):
+        if (
+            st.session_state.saved_file_path
+            and os.path.basename(st.session_state.saved_file_path) != uploaded_file.name
+        ):
             st.session_state.saved_file_path = None
             st.session_state.saved_work_dir = None
             st.session_state.scan_results_valid = False
-        
+
         # 检查是否已保存过这个文件
-        if (st.session_state.saved_file_path and 
-            os.path.basename(st.session_state.saved_file_path) == uploaded_file.name):
+        if (
+            st.session_state.saved_file_path
+            and os.path.basename(st.session_state.saved_file_path) == uploaded_file.name
+        ):
             # 文件已保存，使用保存的路径
             selected_file_path = st.session_state.saved_file_path
             work_dir = st.session_state.saved_work_dir
@@ -1074,48 +1169,50 @@ if input_method == "上传新文件":
 
 else:  # 使用已保存文件
     st.subheader("选择已保存的文件")
-    
+
     available_folders = list_data_folders()
     if not available_folders:
         st.info(f"在 '{DATA_DIR}/' 中未找到已保存的数据。请先上传新文件。")
     else:
         # 文件夹选择
         selected_folder = st.selectbox(
-            "选择数据文件夹:",
-            options=available_folders,
-            index=0
+            "选择数据文件夹:", options=available_folders, index=0
         )
-        
+
         if selected_folder:
             work_dir = os.path.join(DATA_DIR, selected_folder)
             files_in_folder = list_files_in_folder(selected_folder)
-            
+
             if not files_in_folder:
                 st.warning(f"选中的文件夹中没有找到SDF文件: {selected_folder}")
             else:
                 # 文件选择
                 selected_filename = st.selectbox(
-                    "选择SDF文件:",
-                    options=files_in_folder,
-                    index=0
+                    "选择SDF文件:", options=files_in_folder, index=0
                 )
-                
+
                 if selected_filename:
                     selected_file_path = os.path.join(work_dir, selected_filename)
                     current_filename = selected_filename
                     st.info(f"已选择文件: {selected_file_path}")
-                    
+
                     # 检查缓存有效性
-                    if st.session_state.last_processed_file_identifier != selected_file_path:
+                    if (
+                        st.session_state.last_processed_file_identifier
+                        != selected_file_path
+                    ):
                         st.session_state.scan_results_valid = False
-                        st.session_state.last_processed_file_identifier = selected_file_path
+                        st.session_state.last_processed_file_identifier = (
+                            selected_file_path
+                        )
 
 # 优化参数设置
 st.subheader("2. 优化参数设置")
 
 # RMSD阈值说明
 with st.expander("💡 RMSD阈值选择指南", expanded=False):
-    st.markdown("""
+    st.markdown(
+        """
     **RMSD (Root Mean Square Deviation)** 用于衡量两个构象之间的空间差异：
     
     ### 🎯 **推荐设置**
@@ -1131,41 +1228,53 @@ with st.expander("💡 RMSD阈值选择指南", expanded=False):
     
     ### 💊 **小分子特点**
     小分子构象变化通常在 0.2-2.0 Å 范围内，**0.25 Å** 是经验最佳值。
-    """)
+    """
+    )
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    optimization_steps = st.number_input("优化步数:", min_value=100, max_value=10000, value=1000, step=100)
+    optimization_steps = st.number_input(
+        "优化步数:", min_value=100, max_value=10000, value=1000, step=100
+    )
 with col2:
-    temperature = st.number_input("温度 (K):", min_value=200, max_value=500, value=300, step=10)
+    temperature = st.number_input(
+        "温度 (K):", min_value=200, max_value=500, value=300, step=10
+    )
 with col3:
     # RMSD阈值预设选项
     threshold_preset = st.selectbox(
         "RMSD阈值预设:",
-        options=["自定义", "超严格 (0.15Å)", "严格 (0.25Å)", "标准 (0.5Å)", "宽松 (0.8Å)", "很宽松 (1.2Å)"],
+        options=[
+            "自定义",
+            "超严格 (0.15Å)",
+            "严格 (0.25Å)",
+            "标准 (0.5Å)",
+            "宽松 (0.8Å)",
+            "很宽松 (1.2Å)",
+        ],
         index=2,  # 默认选择"严格 (0.25Å)"
-        help="选择预设或自定义调节"
+        help="选择预设或自定义调节",
     )
-    
+
     # 根据预设设置默认值
     preset_values = {
         "超严格 (0.15Å)": 0.15,
-        "严格 (0.25Å)": 0.25, 
+        "严格 (0.25Å)": 0.25,
         "标准 (0.5Å)": 0.5,
         "宽松 (0.8Å)": 0.8,
-        "很宽松 (1.2Å)": 1.2
+        "很宽松 (1.2Å)": 1.2,
     }
-    
+
     default_value = preset_values.get(threshold_preset, 0.25)
-    
+
     if threshold_preset == "自定义":
         rmsd_threshold = st.number_input(
-            "自定义RMSD阈值 (Å):", 
-            min_value=0.05, 
-            max_value=1.5, 
-            value=0.25, 
+            "自定义RMSD阈值 (Å):",
+            min_value=0.05,
+            max_value=1.5,
+            value=0.25,
             step=0.05,
-            help="小分子推荐范围: 0.2-0.8Å"
+            help="小分子推荐范围: 0.2-0.8Å",
         )
     else:
         rmsd_threshold = default_value
@@ -1184,21 +1293,22 @@ with col_threads1:
         min_value=1,
         max_value=cpu_cores * 2,  # 允许超线程
         value=recommended_threads,
-        help=f"建议使用 {recommended_threads} 个线程（ThreadPoolExecutor，兼容Streamlit）"
+        help=f"建议使用 {recommended_threads} 个线程（ThreadPoolExecutor，兼容Streamlit）",
     )
 
 with col_threads2:
     st.metric(
-        label="系统信息", 
+        label="系统信息",
         value=f"{cpu_cores} CPU核心",
-        delta=f"建议: {recommended_threads} 线程"
+        delta=f"建议: {recommended_threads} 线程",
     )
 
 # RMSD并行计算设置
 st.subheader("4. RMSD计算优化")
 
 with st.expander("💡 RMSD并行计算说明", expanded=False):
-    st.markdown("""
+    st.markdown(
+        """
     **智能分子结构分组 + 并行RMSD计算**，大幅提升构象合并效率：
     
     ### 🧬 **智能分组优化**
@@ -1222,15 +1332,16 @@ with st.expander("💡 RMSD并行计算说明", expanded=False):
     - **100-500个构象**: 2-4个进程  
     - **500-2000个构象**: 4-6个进程
     - **> 2000个构象**: 6-8个进程
-    """)
+    """
+    )
 
 col_rmsd1, col_rmsd2 = st.columns(2)
 
 with col_rmsd1:
     use_parallel_rmsd = st.checkbox(
-        "启用RMSD并行计算", 
+        "启用RMSD并行计算",
         value=True,
-        help="构象数≥100时自动启用，显著提升RMSD计算速度"
+        help="构象数≥100时自动启用，显著提升RMSD计算速度",
     )
 
 with col_rmsd2:
@@ -1240,7 +1351,7 @@ with col_rmsd2:
         max_value=min(8, cpu_cores),
         value=min(4, cpu_cores),
         disabled=not use_parallel_rmsd,
-        help="RMSD计算专用线程数，建议4-8个（ThreadPoolExecutor）"
+        help="RMSD计算专用线程数，建议4-8个（ThreadPoolExecutor）",
     )
 
 # 处理范围设置
@@ -1249,7 +1360,9 @@ processing_options = ["处理所有构象", "仅处理前50个构象", "仅处�
 selected_scope = st.radio("选择处理范围:", options=processing_options, index=0)
 
 # 文件处理和预览
-input_ready = (uploaded_file is not None) or (selected_file_path is not None and os.path.exists(selected_file_path))
+input_ready = (uploaded_file is not None) or (
+    selected_file_path is not None and os.path.exists(selected_file_path)
+)
 
 if input_ready:
     st.header("文件预览和优化控制")
@@ -1257,21 +1370,25 @@ if input_ready:
 
     # 确定当前文件
     current_file = uploaded_file if uploaded_file else selected_file_path
-    
+
     # 检查缓存有效性
     cache_valid = is_cache_valid_opt(current_file)
-    
+
     # 缓存管理区域
     if cache_valid:
         with st.expander("🗂️ 扫描缓存管理", expanded=False):
             col1, col2 = st.columns(2)
             with col1:
                 if st.session_state.scan_timestamp_cache_opt:
-                    cache_time = time.strftime("%Y-%m-%d %H:%M:%S", 
-                                             time.localtime(st.session_state.scan_timestamp_cache_opt))
+                    cache_time = time.strftime(
+                        "%Y-%m-%d %H:%M:%S",
+                        time.localtime(st.session_state.scan_timestamp_cache_opt),
+                    )
                     st.info(f"缓存时间: {cache_time}")
             with col2:
-                if st.button("🔄 清除缓存", help="强制重新扫描文件", key="clear_opt_cache"):
+                if st.button(
+                    "🔄 清除缓存", help="强制重新扫描文件", key="clear_opt_cache"
+                ):
                     # 清除所有相关缓存
                     st.session_state.scan_results_valid = False
                     st.session_state.file_hash_cache_opt = None
@@ -1283,7 +1400,7 @@ if input_ready:
                     st.session_state.manual_scan_requested = False
                     st.success("✅ 缓存已清除！")
                     st.rerun()
-    
+
     # 显示扫描状态和按钮
     if cache_valid:
         st.success("✅ 使用缓存的扫描结果 (文件未变更)")
@@ -1291,609 +1408,713 @@ if input_ready:
         preview_smiles = st.session_state.preview_data_cache
         scan_successful = st.session_state.initial_scan_successful_cache
         file_size = st.session_state.file_size_cache
-        
+
         # 显示缓存的结果
         if total_conformers > 0:
             size_mb = file_size / (1024 * 1024)
-            st.info(f"📁 文件大小: {size_mb:.1f} MB | 📊 构象数量: {total_conformers:,}")
-            st.text_area("构象SMILES预览:", "\n".join(preview_smiles), height=150, key="cached_preview")
-        
+            st.info(
+                f"📁 文件大小: {size_mb:.1f} MB | 📊 构象数量: {total_conformers:,}"
+            )
+            st.text_area(
+                "构象SMILES预览:",
+                "\n".join(preview_smiles),
+                height=150,
+                key="cached_preview",
+            )
+
     elif st.session_state.manual_scan_requested:
         # 执行手动扫描
         try:
             scan_result = smart_scan_sdf_with_progress(current_file, current_filename)
-            
+
             # 更新缓存
-            if scan_result['scan_successful']:
+            if scan_result["scan_successful"]:
                 current_hash = get_file_hash_opt(current_file)
-                current_identifier = current_file if isinstance(current_file, str) else getattr(current_file, 'name', str(current_file))
-                
-                st.session_state.total_potential_mols_cache = scan_result['total_conformers']
-                st.session_state.preview_data_cache = scan_result['preview_smiles']
+                current_identifier = (
+                    current_file
+                    if isinstance(current_file, str)
+                    else getattr(current_file, "name", str(current_file))
+                )
+
+                st.session_state.total_potential_mols_cache = scan_result[
+                    "total_conformers"
+                ]
+                st.session_state.preview_data_cache = scan_result["preview_smiles"]
                 st.session_state.initial_scan_successful_cache = True
                 st.session_state.scan_results_valid = True
                 st.session_state.file_hash_cache_opt = current_hash
                 st.session_state.last_processed_file_identifier = current_identifier
                 st.session_state.scan_timestamp_cache_opt = time.time()
-                st.session_state.file_size_cache = scan_result['file_size']
-                
+                st.session_state.file_size_cache = scan_result["file_size"]
+
                 # 获取结果
-                total_conformers = scan_result['total_conformers']
-                preview_smiles = scan_result['preview_smiles']
+                total_conformers = scan_result["total_conformers"]
+                preview_smiles = scan_result["preview_smiles"]
                 scan_successful = True
-                
+
                 # 显示预览
                 if total_conformers > 0:
-                    st.text_area("构象SMILES预览:", "\n".join(preview_smiles), height=150, key="manual_scan_preview")
+                    st.text_area(
+                        "构象SMILES预览:",
+                        "\n".join(preview_smiles),
+                        height=150,
+                        key="manual_scan_preview",
+                    )
             else:
                 st.session_state.scan_results_valid = False
                 scan_successful = False
-                
+
         except Exception as e:
             st.error(f"扫描文件时出错: {e}")
             st.session_state.scan_results_valid = False
             scan_successful = False
-            
+
         # 重置扫描请求标志
         st.session_state.manual_scan_requested = False
-        
+
     else:
         # 显示手动扫描按钮
         st.info("👆 点击下方按钮开始扫描文件内容")
-        
+
         col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("🔍 开始扫描文件", help="扫描SDF文件，统计构象数量", key="start_scan_btn"):
+            if st.button(
+                "🔍 开始扫描文件",
+                help="扫描SDF文件，统计构象数量",
+                key="start_scan_btn",
+            ):
                 st.session_state.manual_scan_requested = True
                 st.rerun()
-        
+
         with col2:
             file_size = get_file_size(current_file)
             size_mb = file_size / (1024 * 1024)
             st.info(f"📁 待扫描文件大小: {size_mb:.1f} MB")
-        
+
             # 提前退出，不显示优化选项
         total_conformers = 0
         scan_successful = False
-    
+
     # 只有当扫描成功时才显示优化选项
     if scan_successful and total_conformers > 0:
-                st.success(f"扫描完成: 找到 {total_conformers} 个构象")
-                st.text_area("构象SMILES预览:", "\n".join(preview_smiles), height=150, key="optimization_preview")
-                
-                # 确定处理限制
-                limit_map = {
-                    processing_options[0]: total_conformers,  # 处理所有
-                    processing_options[1]: min(50, total_conformers),
-                    processing_options[2]: min(200, total_conformers)
+        st.success(f"扫描完成: 找到 {total_conformers} 个构象")
+        st.text_area(
+            "构象SMILES预览:",
+            "\n".join(preview_smiles),
+            height=150,
+            key="optimization_preview",
+        )
+
+        # 确定处理限制
+        limit_map = {
+            processing_options[0]: total_conformers,  # 处理所有
+            processing_options[1]: min(50, total_conformers),
+            processing_options[2]: min(200, total_conformers),
+        }
+        processing_limit = limit_map[selected_scope]
+
+        st.info(f"将处理 {processing_limit} 个构象")
+
+        # 优化方式选择
+        st.subheader("6. 优化执行方式")
+
+        if BACKGROUND_OPTIMIZER_AVAILABLE:
+            execution_method = st.radio(
+                "选择执行方式:",
+                ("智能后台执行 (推荐)", "多进程后台执行 (传统)", "Streamlit内线程执行"),
+                help="智能后台执行具有断点恢复功能，不受页面刷新影响",
+            )
+        else:
+            execution_method = st.radio(
+                "选择执行方式:",
+                ("多进程后台执行 (传统)", "Streamlit内线程执行"),
+                help="多进程方式可以充分利用CPU资源，但会在后台运行",
+            )
+
+        # 优化按钮
+        if execution_method == "智能后台执行 (推荐)":
+            button_label = (
+                f"🚀 启动智能后台优化 {processing_limit} 个构象 (支持断点恢复)"
+            )
+        elif execution_method == "多进程后台执行 (传统)":
+            button_label = f"🚀 启动多进程优化 {processing_limit} 个构象 (使用 {num_threads} 个进程)"
+        else:
+            button_label = f"优化 {processing_limit} 个构象 (使用 {num_threads} 个线程)"
+
+        if st.button(button_label, key="start_optimization_btn"):
+            if execution_method == "智能后台执行 (推荐)":
+                # 智能后台执行
+                st.info("🚀 准备启动智能后台优化...")
+
+                # 确定输入文件路径
+                input_file_path = (
+                    current_file
+                    if isinstance(current_file, str)
+                    else selected_file_path
+                )
+                abs_input_file_path = os.path.abspath(input_file_path)
+
+                # 确定输出目录
+                abs_work_dir = os.path.abspath(work_dir) if work_dir else os.getcwd()
+
+                try:
+                    st.info(f"📂 输入文件: {abs_input_file_path}")
+                    st.info(f"📁 输出目录: {abs_work_dir}")
+                    st.info(
+                        f"⚙️ 配置: {num_threads}进程, {processing_limit}分子, {optimization_steps}步"
+                    )
+
+                    # 调用智能后台优化工具
+                    script_file, script_name = run_background_optimization(
+                        input_file=abs_input_file_path,
+                        output_dir=abs_work_dir,
+                        processing_limit=processing_limit,
+                        num_threads=num_threads,
+                        optimization_steps=optimization_steps,
+                        detached=True,
+                    )
+
+                    st.success("✅ 智能后台优化已启动！")
+                    st.info(f"📄 脚本文件: {script_file}")
+                    st.info(f"🏷️ 任务名称: {script_name}")
+
+                    # 保存任务信息到session state
+                    if "background_tasks" not in st.session_state:
+                        st.session_state.background_tasks = []
+
+                    task_info = {
+                        "script_name": script_name,
+                        "script_file": script_file,
+                        "output_dir": abs_work_dir,
+                        "start_time": time.time(),
+                        "input_file": abs_input_file_path,
+                        "config": {
+                            "num_threads": num_threads,
+                            "processing_limit": processing_limit,
+                            "optimization_steps": optimization_steps,
+                        },
+                    }
+                    st.session_state.background_tasks.append(task_info)
+
+                    st.success("🎉 任务已添加到后台任务列表，可以安全关闭页面或刷新！")
+
+                    # 提供监控命令
+                    log_file = os.path.join(abs_work_dir, f"{script_name}.log")
+                    st.code(f"# 监控命令\ntail -f {log_file}", language="bash")
+
+                    # 提供停止命令
+                    st.code(f"# 停止命令\npkill -f {script_name}", language="bash")
+
+                except Exception as e:
+                    st.error(f"❌ 启动智能后台优化失败: {e}")
+                    st.code(str(e), language="text")
+
+            elif execution_method == "多进程后台执行 (传统)":
+                # 传统多进程后台执行
+                st.info("🚀 准备启动多进程后台优化...")
+
+                # 生成文件路径
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                script_name = f"optimize_{timestamp}.py"
+                log_name = f"optimize_{timestamp}.log"
+                output_name = f"optimized_conformers_{timestamp}_{current_filename}"
+
+                # 确保路径构建正确 - work_dir已经是绝对路径
+                if work_dir and os.path.isabs(work_dir):
+                    script_path = os.path.join(work_dir, script_name)
+                    log_path = os.path.join(work_dir, log_name)
+                    output_path = os.path.join(work_dir, output_name)
+                else:
+                    # 如果work_dir是相对路径，需要转换为绝对路径
+                    abs_work_dir = (
+                        os.path.abspath(work_dir) if work_dir else os.getcwd()
+                    )
+                    script_path = os.path.join(abs_work_dir, script_name)
+                    log_path = os.path.join(abs_work_dir, log_name)
+                    output_path = os.path.join(abs_work_dir, output_name)
+
+                # 配置参数
+                config = {
+                    "processing_limit": processing_limit,
+                    "num_threads": num_threads,
+                    "optimization_steps": optimization_steps,
+                    "temperature": temperature,
+                    "rmsd_threshold": rmsd_threshold,
+                    "rmsd_workers": rmsd_workers if use_parallel_rmsd else 1,
                 }
-                processing_limit = limit_map[selected_scope]
-                
-                st.info(f"将处理 {processing_limit} 个构象")
-                
-                # 优化方式选择
-                st.subheader("6. 优化执行方式")
-                
-                if BACKGROUND_OPTIMIZER_AVAILABLE:
-                    execution_method = st.radio(
-                        "选择执行方式:",
-                        ("智能后台执行 (推荐)", "多进程后台执行 (传统)", "Streamlit内线程执行"),
-                        help="智能后台执行具有断点恢复功能，不受页面刷新影响"
-                    )
-                else:
-                    execution_method = st.radio(
-                        "选择执行方式:",
-                        ("多进程后台执行 (传统)", "Streamlit内线程执行"),
-                        help="多进程方式可以充分利用CPU资源，但会在后台运行"
-                    )
-                
-                # 优化按钮
-                if execution_method == "智能后台执行 (推荐)":
-                    button_label = f"🚀 启动智能后台优化 {processing_limit} 个构象 (支持断点恢复)"
-                elif execution_method == "多进程后台执行 (传统)":
-                    button_label = f"🚀 启动多进程优化 {processing_limit} 个构象 (使用 {num_threads} 个进程)"
-                else:
-                    button_label = f"优化 {processing_limit} 个构象 (使用 {num_threads} 个线程)"
-                
-                if st.button(button_label, key="start_optimization_btn"):
-                    if execution_method == "智能后台执行 (推荐)":
-                        # 智能后台执行
-                        st.info("🚀 准备启动智能后台优化...")
-                        
-                        # 确定输入文件路径
-                        input_file_path = current_file if isinstance(current_file, str) else selected_file_path
-                        abs_input_file_path = os.path.abspath(input_file_path)
-                        
-                        # 确定输出目录
-                        abs_work_dir = os.path.abspath(work_dir) if work_dir else os.getcwd()
-                        
-                        try:
-                            st.info(f"📂 输入文件: {abs_input_file_path}")
-                            st.info(f"📁 输出目录: {abs_work_dir}")
-                            st.info(f"⚙️ 配置: {num_threads}进程, {processing_limit}分子, {optimization_steps}步")
-                            
-                            # 调用智能后台优化工具
-                            script_file, script_name = run_background_optimization(
-                                input_file=abs_input_file_path,
-                                output_dir=abs_work_dir,
-                                processing_limit=processing_limit,
-                                num_threads=num_threads,
-                                optimization_steps=optimization_steps,
-                                detached=True
-                            )
-                            
-                            st.success("✅ 智能后台优化已启动！")
-                            st.info(f"📄 脚本文件: {script_file}")
-                            st.info(f"🏷️ 任务名称: {script_name}")
-                            
-                            # 保存任务信息到session state
-                            if 'background_tasks' not in st.session_state:
-                                st.session_state.background_tasks = []
-                            
-                            task_info = {
-                                'script_name': script_name,
-                                'script_file': script_file,
-                                'output_dir': abs_work_dir,
-                                'start_time': time.time(),
-                                'input_file': abs_input_file_path,
-                                'config': {
-                                    'num_threads': num_threads,
-                                    'processing_limit': processing_limit,
-                                    'optimization_steps': optimization_steps
-                                }
-                            }
-                            st.session_state.background_tasks.append(task_info)
-                            
-                            st.success("🎉 任务已添加到后台任务列表，可以安全关闭页面或刷新！")
-                            
-                            # 提供监控命令
-                            log_file = os.path.join(abs_work_dir, f"{script_name}.log")
-                            st.code(f"# 监控命令\ntail -f {log_file}", language="bash")
-                            
-                            # 提供停止命令
-                            st.code(f"# 停止命令\npkill -f {script_name}", language="bash")
-                            
-                        except Exception as e:
-                            st.error(f"❌ 启动智能后台优化失败: {e}")
-                            st.code(str(e), language="text")
-                            
-                    elif execution_method == "多进程后台执行 (传统)":
-                        # 传统多进程后台执行
-                        st.info("🚀 准备启动多进程后台优化...")
-                        
-                        # 生成文件路径
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        script_name = f"optimize_{timestamp}.py"
-                        log_name = f"optimize_{timestamp}.log"
-                        output_name = f"optimized_conformers_{timestamp}_{current_filename}"
-                        
-                        # 确保路径构建正确 - work_dir已经是绝对路径
-                        if work_dir and os.path.isabs(work_dir):
-                            script_path = os.path.join(work_dir, script_name)
-                            log_path = os.path.join(work_dir, log_name)
-                            output_path = os.path.join(work_dir, output_name)
-                        else:
-                            # 如果work_dir是相对路径，需要转换为绝对路径
-                            abs_work_dir = os.path.abspath(work_dir) if work_dir else os.getcwd()
-                            script_path = os.path.join(abs_work_dir, script_name)
-                            log_path = os.path.join(abs_work_dir, log_name)
-                            output_path = os.path.join(abs_work_dir, output_name)
-                        
-                        # 配置参数
-                        config = {
-                            'processing_limit': processing_limit,
-                            'num_threads': num_threads,
-                            'optimization_steps': optimization_steps,
-                            'temperature': temperature,
-                            'rmsd_threshold': rmsd_threshold,
-                            'rmsd_workers': rmsd_workers if use_parallel_rmsd else 1,
-                        }
-                        
-                        # 生成优化脚本 - 确保使用绝对路径
-                        input_file_path = current_file if isinstance(current_file, str) else selected_file_path
-                        abs_input_file_path = os.path.abspath(input_file_path)
-                        abs_output_path = os.path.abspath(output_path)
-                        abs_log_path = os.path.abspath(log_path)
-                        
-                        script_content = generate_optimization_script(
-                            abs_input_file_path,
-                            abs_output_path,
-                            abs_log_path,
-                            config
-                        )
-                        
-                        # 保存脚本
-                        try:
-                            with open(script_path, 'w', encoding='utf-8') as f:
-                                f.write(script_content)
-                            
-                            st.success(f"✅ 优化脚本已生成: {script_path}")
-                            
-                            # Debug信息：检查脚本文件
-                            if os.path.exists(script_path):
-                                script_size = os.path.getsize(script_path) / 1024
-                                st.info(f"📄 脚本文件大小: {script_size:.1f} KB")
-                            else:
-                                st.error("❌ 脚本文件生成失败")
-                                st.stop()
-                            
-                            # Debug信息：显示启动命令
-                            launch_cmd = [sys.executable, script_path]
-                            st.code(f"启动命令: {' '.join(launch_cmd)}")
-                            st.code(f"工作目录: {work_dir}")
-                            st.code(f"输入文件: {abs_input_file_path}")
-                            st.code(f"输出文件: {abs_output_path}")
-                            st.code(f"日志文件: {abs_log_path}")
-                            
-                            # 启动后台进程 - 使用绝对路径，避免相对路径问题
-                            abs_script_path = os.path.abspath(script_path)
-                            abs_work_dir = os.path.abspath(work_dir) if work_dir else os.getcwd()
-                            
-                            launch_cmd_abs = [sys.executable, abs_script_path]
-                            st.code(f"绝对路径启动命令: {' '.join(launch_cmd_abs)}")
-                            
-                            process = subprocess.Popen(
-                                launch_cmd_abs,
-                                cwd=abs_work_dir,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                text=True
-                            )
-                            
-                            # 等待短暂时间检查进程是否立即失败
-                            time.sleep(0.5)
-                            poll_result = process.poll()
-                            
-                            if poll_result is not None:
-                                # 进程已经退出
-                                stdout, stderr = process.communicate()
-                                st.error(f"❌ 进程启动后立即退出 (退出码: {poll_result})")
-                                if stdout:
-                                    st.error("标准输出:")
-                                    st.code(stdout, language="text")
-                                if stderr:
-                                    st.error("错误输出:")
-                                    st.code(stderr, language="text")
-                            else:
-                                st.success(f"🚀 多进程优化已启动! (PID: {process.pid})")
-                                st.info(f"📊 配置: {num_threads}个进程, {processing_limit}个构象, RMSD阈值{rmsd_threshold}Å")
-                                st.info(f"📝 日志文件: {log_path}")
-                                st.info(f"📤 输出文件: {output_path}")
-                                
-                                # 保存进程信息到session state
-                                st.session_state.current_process = {
-                                    'pid': process.pid,
-                                    'script_path': script_path,
-                                    'log_path': log_path,
-                                    'output_path': output_path,
-                                    'start_time': time.time(),
-                                    'process': process
-                                }
-                                
-                                st.warning("⚠️ 请勿关闭此页面，可以使用下方的监控功能查看进度")
-                            
-                        except Exception as e:
-                            st.error(f"启动多进程优化失败: {e}")
-                            st.error(f"错误详情: {str(e)}")
-                            import traceback
-                            st.code(traceback.format_exc(), language="text")
-                            
+
+                # 生成优化脚本 - 确保使用绝对路径
+                input_file_path = (
+                    current_file
+                    if isinstance(current_file, str)
+                    else selected_file_path
+                )
+                abs_input_file_path = os.path.abspath(input_file_path)
+                abs_output_path = os.path.abspath(output_path)
+                abs_log_path = os.path.abspath(log_path)
+
+                script_content = generate_optimization_script(
+                    abs_input_file_path, abs_output_path, abs_log_path, config
+                )
+
+                # 保存脚本
+                try:
+                    with open(script_path, "w", encoding="utf-8") as f:
+                        f.write(script_content)
+
+                    st.success(f"✅ 优化脚本已生成: {script_path}")
+
+                    # Debug信息：检查脚本文件
+                    if os.path.exists(script_path):
+                        script_size = os.path.getsize(script_path) / 1024
+                        st.info(f"📄 脚本文件大小: {script_size:.1f} KB")
                     else:
-                        # 原有的线程执行方式
-                        # 并行处理提示
-                        if num_threads > 1:
-                            cpu_cores = multiprocessing.cpu_count()
-                            efficiency = min(num_threads, cpu_cores) / cpu_cores * 100
-                            st.info(f"🚀 启动多线程并行优化 ({num_threads} 线程)")
-                            st.info(f"💻 预计CPU利用率: {efficiency:.0f}% | 受GIL限制")
-                            if num_threads > cpu_cores:
-                                st.warning(f"⚠️ 线程数({num_threads})超过CPU核心数({cpu_cores})，可能影响性能")
-                        
-                        # 重新读取文件以进行处理
-                        if isinstance(current_file, str):
-                            supplier = Chem.ForwardSDMolSupplier(current_file, removeHs=False, sanitize=True)
+                        st.error("❌ 脚本文件生成失败")
+                        st.stop()
+
+                    # Debug信息：显示启动命令
+                    launch_cmd = [sys.executable, script_path]
+                    st.code(f"启动命令: {' '.join(launch_cmd)}")
+                    st.code(f"工作目录: {work_dir}")
+                    st.code(f"输入文件: {abs_input_file_path}")
+                    st.code(f"输出文件: {abs_output_path}")
+                    st.code(f"日志文件: {abs_log_path}")
+
+                    # 启动后台进程 - 使用绝对路径，避免相对路径问题
+                    abs_script_path = os.path.abspath(script_path)
+                    abs_work_dir = (
+                        os.path.abspath(work_dir) if work_dir else os.getcwd()
+                    )
+
+                    launch_cmd_abs = [sys.executable, abs_script_path]
+                    st.code(f"绝对路径启动命令: {' '.join(launch_cmd_abs)}")
+
+                    process = subprocess.Popen(
+                        launch_cmd_abs,
+                        cwd=abs_work_dir,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+
+                    # 等待短暂时间检查进程是否立即失败
+                    time.sleep(0.5)
+                    poll_result = process.poll()
+
+                    if poll_result is not None:
+                        # 进程已经退出
+                        stdout, stderr = process.communicate()
+                        st.error(f"❌ 进程启动后立即退出 (退出码: {poll_result})")
+                        if stdout:
+                            st.error("标准输出:")
+                            st.code(stdout, language="text")
+                        if stderr:
+                            st.error("错误输出:")
+                            st.code(stderr, language="text")
+                    else:
+                        st.success(f"🚀 多进程优化已启动! (PID: {process.pid})")
+                        st.info(
+                            f"📊 配置: {num_threads}个进程, {processing_limit}个构象, RMSD阈值{rmsd_threshold}Å"
+                        )
+                        st.info(f"📝 日志文件: {log_path}")
+                        st.info(f"📤 输出文件: {output_path}")
+
+                        # 保存进程信息到session state
+                        st.session_state.current_process = {
+                            "pid": process.pid,
+                            "script_path": script_path,
+                            "log_path": log_path,
+                            "output_path": output_path,
+                            "start_time": time.time(),
+                            "process": process,
+                        }
+
+                        st.warning("⚠️ 请勿关闭此页面，可以使用下方的监控功能查看进度")
+
+                except Exception as e:
+                    st.error(f"启动多进程优化失败: {e}")
+                    st.error(f"错误详情: {str(e)}")
+                    import traceback
+
+                    st.code(traceback.format_exc(), language="text")
+
+            else:
+                # 原有的线程执行方式
+                # 并行处理提示
+                if num_threads > 1:
+                    cpu_cores = multiprocessing.cpu_count()
+                    efficiency = min(num_threads, cpu_cores) / cpu_cores * 100
+                    st.info(f"🚀 启动多线程并行优化 ({num_threads} 线程)")
+                    st.info(f"💻 预计CPU利用率: {efficiency:.0f}% | 受GIL限制")
+                    if num_threads > cpu_cores:
+                        st.warning(
+                            f"⚠️ 线程数({num_threads})超过CPU核心数({cpu_cores})，可能影响性能"
+                        )
+
+                # 重新读取文件以进行处理
+                if isinstance(current_file, str):
+                    supplier = Chem.ForwardSDMolSupplier(
+                        current_file, removeHs=False, sanitize=True
+                    )
+                else:
+                    if hasattr(current_file, "seek"):
+                        current_file.seek(0)
+                    sdf_stream = io.BytesIO(current_file.getvalue())
+                    supplier = Chem.ForwardSDMolSupplier(
+                        sdf_stream, removeHs=False, sanitize=True
+                    )
+
+                # 收集要处理的分子
+                mols_to_optimize = []
+                skipped_count = 0
+
+                for i, mol in enumerate(supplier):
+                    if len(mols_to_optimize) >= processing_limit:
+                        break
+                    if mol is not None:
+                        # 预处理分子
+                        processed_mol = preprocess_molecule(mol)
+                        if processed_mol is not None:
+                            mols_to_optimize.append((processed_mol, i))
                         else:
-                            if hasattr(current_file, 'seek'):
-                                current_file.seek(0)
-                            sdf_stream = io.BytesIO(current_file.getvalue())
-                            supplier = Chem.ForwardSDMolSupplier(sdf_stream, removeHs=False, sanitize=True)
-                        
-                        # 收集要处理的分子
-                        mols_to_optimize = []
-                        skipped_count = 0
-                        
-                        for i, mol in enumerate(supplier):
-                            if len(mols_to_optimize) >= processing_limit:
-                                break
-                            if mol is not None:
-                                # 预处理分子
-                                processed_mol = preprocess_molecule(mol)
-                                if processed_mol is not None:
-                                    mols_to_optimize.append((processed_mol, i))
-                                else:
-                                    skipped_count += 1
-                        
-                        if skipped_count > 0:
-                            st.warning(f"跳过了 {skipped_count} 个无效或缺少3D坐标的分子")
-                        
-                        if mols_to_optimize:
-                            st.info(f"开始优化 {len(mols_to_optimize)} 个构象...")
-                            progress_bar = st.progress(0.0)
-                            status_text = st.empty()
-                            
+                            skipped_count += 1
+
+                if skipped_count > 0:
+                    st.warning(f"跳过了 {skipped_count} 个无效或缺少3D坐标的分子")
+
+                if mols_to_optimize:
+                    st.info(f"开始优化 {len(mols_to_optimize)} 个构象...")
+                    progress_bar = st.progress(0.0)
+                    status_text = st.empty()
+
+                    optimized_mols = []
+                    success_count = 0
+                    errors = []
+
+                    start_time = time.time()
+
+                    if num_threads == 1:
+                        # 单线程处理
+                        for idx, mol_data in enumerate(mols_to_optimize):
+                            status_text.text(
+                                f"正在优化构象 {idx+1}/{len(mols_to_optimize)}..."
+                            )
+
+                            mol, orig_idx = mol_data
+                            result = optimize_molecule_with_openmm(
+                                mol,
+                                0,
+                                optimization_steps,
+                                temperature,
+                                use_gpu=gpu_available,
+                            )
+
+                            if result["success"] and result["mol"]:
+                                optimized_mols.append(result["mol"])
+                                success_count += 1
+                            else:
+                                errors.append(f"构象 {orig_idx}: {result['message']}")
+
+                            progress = (idx + 1) / len(mols_to_optimize)
+                            progress_bar.progress(progress)
+                    else:
+                        # 多线程处理 - 使用ThreadPoolExecutor (在Streamlit环境中更稳定)
+                        st.info(
+                            f"🚀 使用多线程并行处理 ({num_threads} 个线程)，在Streamlit环境中稳定运行"
+                        )
+                        st.info(
+                            "💡 注意：受Python GIL限制，CPU密集任务提升有限，但仍能带来性能改善"
+                        )
+
+                        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                        def optimize_single_thread(mol_data_and_params):
+                            """线程安全的分子优化函数"""
+                            mol_data, opt_steps, temp = mol_data_and_params
+                            mol, orig_idx = mol_data
+                            try:
+                                result = optimize_molecule_with_openmm(
+                                    mol, 0, opt_steps, temp, use_gpu=False
+                                )
+                                return {
+                                    "orig_idx": orig_idx,
+                                    "mol": result["mol"] if result["success"] else None,
+                                    "success": result["success"],
+                                    "message": result["message"],
+                                }
+                            except Exception as e:
+                                return {
+                                    "orig_idx": orig_idx,
+                                    "mol": None,
+                                    "success": False,
+                                    "message": f"线程异常: {str(e)}",
+                                }
+
+                        try:
+                            with ThreadPoolExecutor(
+                                max_workers=num_threads
+                            ) as executor:
+                                # 提交所有任务
+                                future_to_idx = {}
+                                for idx, mol_data in enumerate(mols_to_optimize):
+                                    future = executor.submit(
+                                        optimize_single_thread,
+                                        (mol_data, optimization_steps, temperature),
+                                    )
+                                    future_to_idx[future] = idx
+
+                                completed = 0
+                                for future in as_completed(future_to_idx):
+                                    try:
+                                        result = future.result()
+
+                                        if result["success"] and result["mol"]:
+                                            optimized_mols.append(result["mol"])
+                                            success_count += 1
+                                        else:
+                                            errors.append(
+                                                f"构象 {result['orig_idx']}: {result['message']}"
+                                            )
+
+                                        completed += 1
+
+                                        # 更新进度
+                                        status_text.text(
+                                            f"正在优化构象 {completed}/{len(mols_to_optimize)}... (多线程并行)"
+                                        )
+                                        progress = completed / len(mols_to_optimize)
+                                        progress_bar.progress(progress)
+
+                                    except Exception as e:
+                                        completed += 1
+                                        errors.append(f"处理异常: {str(e)}")
+                                        status_text.text(
+                                            f"正在优化构象 {completed}/{len(mols_to_optimize)}... (有错误)"
+                                        )
+                                        progress = completed / len(mols_to_optimize)
+                                        progress_bar.progress(progress)
+
+                        except Exception as e:
+                            st.error(f"多线程处理出错: {e}")
+                            st.info("回退到单线程处理...")
+
+                            # 清空之前的结果
                             optimized_mols = []
                             success_count = 0
                             errors = []
-                            
-                            start_time = time.time()
-                            
-                            if num_threads == 1:
-                                # 单线程处理
-                                for idx, mol_data in enumerate(mols_to_optimize):
-                                    status_text.text(f"正在优化构象 {idx+1}/{len(mols_to_optimize)}...")
-                                    
-                                    mol, orig_idx = mol_data
-                                    result = optimize_molecule_with_openmm(
-                                        mol, 0, optimization_steps, temperature, use_gpu=gpu_available
-                                    )
-                                    
-                                    if result['success'] and result['mol']:
-                                        optimized_mols.append(result['mol'])
-                                        success_count += 1
-                                    else:
-                                        errors.append(f"构象 {orig_idx}: {result['message']}")
-                                    
-                                    progress = (idx + 1) / len(mols_to_optimize)
-                                    progress_bar.progress(progress)
-                            else:
-                                # 多线程处理 - 使用ThreadPoolExecutor (在Streamlit环境中更稳定)
-                                st.info(f"🚀 使用多线程并行处理 ({num_threads} 个线程)，在Streamlit环境中稳定运行")
-                                st.info("💡 注意：受Python GIL限制，CPU密集任务提升有限，但仍能带来性能改善")
-                                
-                                from concurrent.futures import ThreadPoolExecutor, as_completed
-                                
-                                def optimize_single_thread(mol_data_and_params):
-                                    """线程安全的分子优化函数"""
-                                    mol_data, opt_steps, temp = mol_data_and_params
-                                    mol, orig_idx = mol_data
-                                    try:
-                                        result = optimize_molecule_with_openmm(mol, 0, opt_steps, temp, use_gpu=False)
-                                        return {
-                                            'orig_idx': orig_idx,
-                                            'mol': result['mol'] if result['success'] else None,
-                                            'success': result['success'],
-                                            'message': result['message']
-                                        }
-                                    except Exception as e:
-                                        return {
-                                            'orig_idx': orig_idx,
-                                            'mol': None,
-                                            'success': False,
-                                            'message': f"线程异常: {str(e)}"
-                                        }
-                                
-                                try:
-                                    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-                                        # 提交所有任务
-                                        future_to_idx = {}
-                                        for idx, mol_data in enumerate(mols_to_optimize):
-                                            future = executor.submit(optimize_single_thread, (mol_data, optimization_steps, temperature))
-                                            future_to_idx[future] = idx
-                                        
-                                        completed = 0
-                                        for future in as_completed(future_to_idx):
-                                            try:
-                                                result = future.result()
-                                                
-                                                if result['success'] and result['mol']:
-                                                    optimized_mols.append(result['mol'])
-                                                    success_count += 1
-                                                else:
-                                                    errors.append(f"构象 {result['orig_idx']}: {result['message']}")
-                                                
-                                                completed += 1
-                                                
-                                                # 更新进度
-                                                status_text.text(f"正在优化构象 {completed}/{len(mols_to_optimize)}... (多线程并行)")
-                                                progress = completed / len(mols_to_optimize)
-                                                progress_bar.progress(progress)
-                                            
-                                            except Exception as e:
-                                                completed += 1
-                                                errors.append(f"处理异常: {str(e)}")
-                                                status_text.text(f"正在优化构象 {completed}/{len(mols_to_optimize)}... (有错误)")
-                                                progress = completed / len(mols_to_optimize)
-                                                progress_bar.progress(progress)
-                                        
-                                except Exception as e:
-                                    st.error(f"多线程处理出错: {e}")
-                                    st.info("回退到单线程处理...")
-                                    
-                                    # 清空之前的结果
-                                    optimized_mols = []
-                                    success_count = 0
-                                    errors = []
-                                    
-                                    # 回退到单线程处理
-                                    for idx, mol_data in enumerate(mols_to_optimize):
-                                        status_text.text(f"正在优化构象 {idx+1}/{len(mols_to_optimize)}... (单线程回退)")
-                                        
-                                        mol, orig_idx = mol_data
-                                        result = optimize_molecule_with_openmm(
-                                            mol, 0, optimization_steps, temperature, use_gpu=gpu_available
-                                        )
-                                        
-                                        if result['success'] and result['mol']:
-                                            optimized_mols.append(result['mol'])
-                                            success_count += 1
-                                        else:
-                                            errors.append(f"构象 {orig_idx}: {result['message']}")
-                                        
-                                        progress = (idx + 1) / len(mols_to_optimize)
-                                        progress_bar.progress(progress)
-                        
-                            total_time = time.time() - start_time
-                            status_text.text(f"优化完成！总耗时: {total_time/60:.1f}分钟")
-                            
-                            st.success(f"成功优化 {success_count}/{len(mols_to_optimize)} 个构象")
-                            
-                            if errors and len(errors) <= 10:
-                                with st.expander("⚠️ 查看错误信息", expanded=False):
-                                    for error in errors:
-                                        st.write(f"- {error}")
-                            elif len(errors) > 10:
-                                                                st.warning(f"有 {len(errors)} 个构象优化失败")
-                            
-                            if optimized_mols:
-                                st.info("🚀 跳过RMSD合并，直接输出所有优化后的构象（提高速度）")
-                                
-                                # 直接生成输出SDF
-                                sdf_output = mols_to_sdf_string(optimized_mols)
-                                
-                                # 保存到工作目录
-                                output_filename = f"optimized_conformers_{current_filename}"
-                                if work_dir and os.path.exists(work_dir):
-                                    output_path = os.path.join(work_dir, output_filename)
-                                    try:
-                                        with open(output_path, 'w') as f:
-                                            f.write(sdf_output)
-                                        st.success(f"优化结果已保存到: {output_path}")
-                                    except Exception as e:
-                                        st.warning(f"保存到工作目录失败: {e}")
-                                
-                                # 下载按钮
-                                st.download_button(
-                                    label="📥 下载优化后的构象 (SDF)",
-                                    data=sdf_output,
-                                    file_name=output_filename,
-                                    mime="chemical/x-mdl-sdfile",
+
+                            # 回退到单线程处理
+                            for idx, mol_data in enumerate(mols_to_optimize):
+                                status_text.text(
+                                    f"正在优化构象 {idx+1}/{len(mols_to_optimize)}... (单线程回退)"
                                 )
-                                
-                                # 显示文件大小信息
-                                output_size_mb = len(sdf_output.encode('utf-8')) / (1024 * 1024)
-                                st.info(f"输出SDF文件大小: {output_size_mb:.1f} MB")
-                                
-                                # 预览
-                                st.subheader("优化后SDF预览 (前1000字符)")
-                                st.code(sdf_output[:1000], language="text")
-                            else:
-                                st.warning("没有成功优化的构象可供输出")
-                else:
-                    st.warning("文件中没有找到有效的分子构象")
-                
+
+                                mol, orig_idx = mol_data
+                                result = optimize_molecule_with_openmm(
+                                    mol,
+                                    0,
+                                    optimization_steps,
+                                    temperature,
+                                    use_gpu=gpu_available,
+                                )
+
+                                if result["success"] and result["mol"]:
+                                    optimized_mols.append(result["mol"])
+                                    success_count += 1
+                                else:
+                                    errors.append(
+                                        f"构象 {orig_idx}: {result['message']}"
+                                    )
+
+                                progress = (idx + 1) / len(mols_to_optimize)
+                                progress_bar.progress(progress)
+
+                    total_time = time.time() - start_time
+                    status_text.text(f"优化完成！总耗时: {total_time/60:.1f}分钟")
+
+                    st.success(
+                        f"成功优化 {success_count}/{len(mols_to_optimize)} 个构象"
+                    )
+
+                    if errors and len(errors) <= 10:
+                        with st.expander("⚠️ 查看错误信息", expanded=False):
+                            for error in errors:
+                                st.write(f"- {error}")
+                    elif len(errors) > 10:
+                        st.warning(f"有 {len(errors)} 个构象优化失败")
+
+                    if optimized_mols:
+                        st.info("🚀 跳过RMSD合并，直接输出所有优化后的构象（提高速度）")
+
+                        # 直接生成输出SDF
+                        sdf_output = mols_to_sdf_string(optimized_mols)
+
+                        # 保存到工作目录
+                        output_filename = f"optimized_conformers_{current_filename}"
+                        if work_dir and os.path.exists(work_dir):
+                            output_path = os.path.join(work_dir, output_filename)
+                            try:
+                                with open(output_path, "w") as f:
+                                    f.write(sdf_output)
+                                st.success(f"优化结果已保存到: {output_path}")
+                            except Exception as e:
+                                st.warning(f"保存到工作目录失败: {e}")
+
+                        # 下载按钮
+                        st.download_button(
+                            label="📥 下载优化后的构象 (SDF)",
+                            data=sdf_output,
+                            file_name=output_filename,
+                            mime="chemical/x-mdl-sdfile",
+                        )
+
+                        # 显示文件大小信息
+                        output_size_mb = len(sdf_output.encode("utf-8")) / (1024 * 1024)
+                        st.info(f"输出SDF文件大小: {output_size_mb:.1f} MB")
+
+                        # 预览
+                        st.subheader("优化后SDF预览 (前1000字符)")
+                        st.code(sdf_output[:1000], language="text")
+                    else:
+                        st.warning("没有成功优化的构象可供输出")
+        else:
+            st.warning("文件中没有找到有效的分子构象")
 
 
 # 智能后台任务监控区域
 if BACKGROUND_OPTIMIZER_AVAILABLE:
     st.header("🤖 智能后台任务监控")
-    
-    if 'background_tasks' in st.session_state and st.session_state.background_tasks:
+
+    if "background_tasks" in st.session_state and st.session_state.background_tasks:
         for idx, task in enumerate(st.session_state.background_tasks):
             with st.expander(f"📋 任务 {idx+1}: {task['script_name']}", expanded=True):
                 col1, col2, col3 = st.columns(3)
-                
+
                 with col1:
-                    elapsed = time.time() - task['start_time']
+                    elapsed = time.time() - task["start_time"]
                     st.metric("运行时间", f"{elapsed/60:.1f} 分钟")
-                
+
                 with col2:
                     # 检查任务状态
-                    status_info = check_background_status(task['output_dir'], task['script_name'])
+                    status_info = check_background_status(
+                        task["output_dir"], task["script_name"]
+                    )
                     status_display = {
-                        'running': "🟢 运行中",
-                        'completed': "✅ 已完成",
-                        'error': "❌ 出错",
-                        'unknown': "❓ 未知"
+                        "running": "🟢 运行中",
+                        "completed": "✅ 已完成",
+                        "error": "❌ 出错",
+                        "unknown": "❓ 未知",
                     }
-                    st.metric("状态", status_display.get(status_info['status'], "❓ 未知"))
-                
+                    st.metric(
+                        "状态", status_display.get(status_info["status"], "❓ 未知")
+                    )
+
                 with col3:
-                    config = task['config']
-                    st.metric("配置", f"{config['num_threads']}进程/{config['processing_limit']}分子")
-                
+                    config = task["config"]
+                    st.metric(
+                        "配置",
+                        f"{config['num_threads']}进程/{config['processing_limit']}分子",
+                    )
+
                 # 详细信息
-                st.code(f"""
+                st.code(
+                    f"""
 任务名称: {task['script_name']}
 输入文件: {task['input_file']}
 输出目录: {task['output_dir']}
 脚本文件: {task['script_file']}
-""", language="text")
-                
+""",
+                    language="text",
+                )
+
                 # 操作按钮
                 col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
-                
+
                 with col_btn1:
                     if st.button(f"📖 查看日志 {idx+1}", key=f"log_{idx}"):
-                        log_file = os.path.join(task['output_dir'], f"{task['script_name']}.log")
+                        log_file = os.path.join(
+                            task["output_dir"], f"{task['script_name']}.log"
+                        )
                         if os.path.exists(log_file):
                             try:
-                                with open(log_file, 'r', encoding='utf-8') as f:
+                                with open(log_file, "r", encoding="utf-8") as f:
                                     log_content = f.read()
-                                
+
                                 # 只显示最后100行
-                                log_lines = log_content.split('\n')
-                                recent_logs = '\n'.join(log_lines[-100:])
+                                log_lines = log_content.split("\n")
+                                recent_logs = "\n".join(log_lines[-100:])
                                 st.code(recent_logs, language="text")
-                                
+
                             except Exception as e:
                                 st.error(f"读取日志失败: {e}")
                         else:
                             st.warning("日志文件不存在")
-                
+
                 with col_btn2:
                     if st.button(f"📊 检查结果 {idx+1}", key=f"result_{idx}"):
-                        if status_info['status'] == 'completed':
+                        if status_info["status"] == "completed":
                             st.success("🎉 任务已完成！")
-                            st.code(status_info.get('details', ''), language="text")
-                            
+                            st.code(status_info.get("details", ""), language="text")
+
                             # 查找输出文件
                             output_files = []
-                            for file in os.listdir(task['output_dir']):
-                                if file.startswith('optimized_') and file.endswith('.sdf'):
+                            for file in os.listdir(task["output_dir"]):
+                                if file.startswith("optimized_") and file.endswith(
+                                    ".sdf"
+                                ):
                                     output_files.append(file)
-                            
+
                             if output_files:
                                 for output_file in output_files:
-                                    full_path = os.path.join(task['output_dir'], output_file)
-                                    file_size = os.path.getsize(full_path) / (1024*1024)
-                                    st.info(f"📄 输出文件: {output_file} ({file_size:.1f} MB)")
-                                    
+                                    full_path = os.path.join(
+                                        task["output_dir"], output_file
+                                    )
+                                    file_size = os.path.getsize(full_path) / (
+                                        1024 * 1024
+                                    )
+                                    st.info(
+                                        f"📄 输出文件: {output_file} ({file_size:.1f} MB)"
+                                    )
+
                                     # 提供下载按钮
-                                    with open(full_path, 'rb') as f:
+                                    with open(full_path, "rb") as f:
                                         st.download_button(
                                             f"📥 下载 {output_file}",
                                             f.read(),
                                             file_name=output_file,
                                             mime="chemical/x-mdl-sdfile",
-                                            key=f"download_{idx}_{output_file}"
+                                            key=f"download_{idx}_{output_file}",
                                         )
                             else:
                                 st.warning("未找到输出文件")
-                                
-                        elif status_info['status'] == 'error':
+
+                        elif status_info["status"] == "error":
                             st.error("❌ 任务执行出错")
-                            st.code(status_info.get('details', ''), language="text")
-                        elif status_info['status'] == 'running':
-                            if 'memory_mb' in status_info:
-                                st.info(f"🔄 任务运行中 (PID: {status_info['pid']}, 内存: {status_info['memory_mb']:.1f}MB)")
+                            st.code(status_info.get("details", ""), language="text")
+                        elif status_info["status"] == "running":
+                            if "memory_mb" in status_info:
+                                st.info(
+                                    f"🔄 任务运行中 (PID: {status_info['pid']}, 内存: {status_info['memory_mb']:.1f}MB)"
+                                )
                             else:
                                 st.info("🔄 任务运行中...")
                         else:
                             st.warning("❓ 任务状态未知")
-                
+
                 with col_btn3:
                     if st.button(f"⛔ 停止任务 {idx+1}", key=f"stop_{idx}"):
-                        if status_info['status'] == 'running' and 'pid' in status_info:
+                        if status_info["status"] == "running" and "pid" in status_info:
                             try:
                                 import psutil
-                                process = psutil.Process(int(status_info['pid']))
+
+                                process = psutil.Process(int(status_info["pid"]))
                                 process.terminate()
                                 st.success(f"✅ 任务 {status_info['pid']} 已停止")
                             except Exception as e:
                                 st.error(f"停止任务失败: {e}")
                         else:
                             st.warning("任务未在运行")
-                
+
                 with col_btn4:
                     if st.button(f"🗑️ 删除记录 {idx+1}", key=f"delete_{idx}"):
                         st.session_state.background_tasks.pop(idx)
@@ -1905,158 +2126,175 @@ if BACKGROUND_OPTIMIZER_AVAILABLE:
 # 传统后台进程监控区域
 st.header("🔍 传统后台任务监控")
 
-if hasattr(st.session_state, 'current_process') and st.session_state.current_process:
+if hasattr(st.session_state, "current_process") and st.session_state.current_process:
     process_info = st.session_state.current_process
-    
+
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
-        st.metric("进程ID", process_info['pid'])
-    
+        st.metric("进程ID", process_info["pid"])
+
     with col2:
-        elapsed = time.time() - process_info['start_time']
+        elapsed = time.time() - process_info["start_time"]
         st.metric("运行时间", f"{elapsed/60:.1f} 分钟")
-    
+
     with col3:
         # 检查进程状态
         try:
-            process = process_info['process']
+            process = process_info["process"]
             poll_result = process.poll()
             if poll_result is None:
                 status = "🟢 运行中"
                 # 额外检查：通过PID验证进程是否真的在运行
                 try:
                     import psutil
-                    if psutil.pid_exists(process_info['pid']):
+
+                    if psutil.pid_exists(process_info["pid"]):
                         status += " (已验证)"
                     else:
                         status = "❌ 进程不存在"
                 except ImportError:
                     # 使用系统命令检查
-                    result = subprocess.run(['ps', '-p', str(process_info['pid'])], 
-                                          capture_output=True, text=True)
+                    result = subprocess.run(
+                        ["ps", "-p", str(process_info["pid"])],
+                        capture_output=True,
+                        text=True,
+                    )
                     if result.returncode != 0:
                         status = "❌ 进程不存在"
             else:
-                status = "✅ 已完成" if poll_result == 0 else f"❌ 出错 (退出码: {poll_result})"
+                status = (
+                    "✅ 已完成"
+                    if poll_result == 0
+                    else f"❌ 出错 (退出码: {poll_result})"
+                )
         except Exception as e:
             status = f"❓ 未知 ({str(e)})"
-        
+
         st.metric("状态", status)
-    
+
     # 控制按钮
     col_btn1, col_btn2, col_btn3, col_btn4, col_btn5 = st.columns(5)
-    
+
     with col_btn1:
         if st.button("📖 查看日志", key="view_log_btn"):
-            if os.path.exists(process_info['log_path']):
+            if os.path.exists(process_info["log_path"]):
                 try:
-                    with open(process_info['log_path'], 'r', encoding='utf-8') as f:
+                    with open(process_info["log_path"], "r", encoding="utf-8") as f:
                         log_content = f.read()
-                    
+
                     st.subheader("📝 实时日志")
                     # 只显示最后50行
-                    log_lines = log_content.split('\n')
-                    recent_logs = '\n'.join(log_lines[-50:])
+                    log_lines = log_content.split("\n")
+                    recent_logs = "\n".join(log_lines[-50:])
                     st.code(recent_logs, language="text")
-                    
+
                 except Exception as e:
                     st.error(f"读取日志失败: {e}")
             else:
                 st.warning("日志文件尚未生成")
-    
+
     with col_btn2:
         if st.button("📊 检查完成", key="check_completion_btn"):
-            done_file = process_info['log_path'] + '.done'
-            error_file = process_info['log_path'] + '.error'
-            
+            done_file = process_info["log_path"] + ".done"
+            error_file = process_info["log_path"] + ".error"
+
             if os.path.exists(done_file):
                 st.success("🎉 优化任务已完成!")
                 try:
-                    with open(done_file, 'r') as f:
+                    with open(done_file, "r") as f:
                         result_info = f.read()
                     st.code(result_info)
-                    
+
                     # 检查输出文件
-                    if os.path.exists(process_info['output_path']):
-                        file_size = os.path.getsize(process_info['output_path']) / (1024*1024)
-                        st.info(f"✅ 输出文件已生成: {process_info['output_path']} ({file_size:.1f} MB)")
-                        
+                    if os.path.exists(process_info["output_path"]):
+                        file_size = os.path.getsize(process_info["output_path"]) / (
+                            1024 * 1024
+                        )
+                        st.info(
+                            f"✅ 输出文件已生成: {process_info['output_path']} ({file_size:.1f} MB)"
+                        )
+
                         # 提供下载按钮
-                        with open(process_info['output_path'], 'rb') as f:
+                        with open(process_info["output_path"], "rb") as f:
                             st.download_button(
                                 "📥 下载优化结果",
                                 f.read(),
-                                file_name=os.path.basename(process_info['output_path']),
-                                mime="chemical/x-mdl-sdfile"
+                                file_name=os.path.basename(process_info["output_path"]),
+                                mime="chemical/x-mdl-sdfile",
                             )
-                    
+
                 except Exception as e:
                     st.error(f"读取结果失败: {e}")
-                    
+
             elif os.path.exists(error_file):
                 st.error("❌ 优化任务出错!")
                 try:
-                    with open(error_file, 'r') as f:
+                    with open(error_file, "r") as f:
                         error_info = f.read()
                     st.code(error_info, language="text")
                 except Exception as e:
                     st.error(f"读取错误信息失败: {e}")
             else:
                 st.info("⏳ 任务仍在运行中...")
-    
+
     with col_btn3:
         if st.button("🔄 刷新页面", key="refresh_page_btn"):
             st.rerun()
-    
+
     with col_btn4:
         if st.button("🗑️ 清除任务", key="clear_task_btn"):
             try:
                 # 尝试终止进程
-                process = process_info['process']
+                process = process_info["process"]
                 if process.poll() is None:
                     process.terminate()
                     st.warning("进程已终止")
-                
+
                 # 清除session state
                 del st.session_state.current_process
                 st.rerun()
-                
+
             except Exception as e:
                 st.error(f"清除任务失败: {e}")
-    
+
     with col_btn5:
         if st.button("🔍 Debug信息", key="debug_info_btn"):
             st.subheader("🔍 Debug信息")
-            
+
             # 显示脚本路径和大小
-            if os.path.exists(process_info['script_path']):
-                script_size = os.path.getsize(process_info['script_path']) / 1024
-                st.info(f"脚本文件: {process_info['script_path']} ({script_size:.1f} KB)")
+            if os.path.exists(process_info["script_path"]):
+                script_size = os.path.getsize(process_info["script_path"]) / 1024
+                st.info(
+                    f"脚本文件: {process_info['script_path']} ({script_size:.1f} KB)"
+                )
             else:
                 st.error(f"脚本文件不存在: {process_info['script_path']}")
-            
+
             # 显示进程详细信息
-            st.code(f"""
+            st.code(
+                f"""
 进程ID: {process_info['pid']}
 脚本路径: {process_info['script_path']}
 日志路径: {process_info['log_path']}
 输出路径: {process_info['output_path']}
 启动时间: {time.ctime(process_info['start_time'])}
-""", language="text")
-            
+""",
+                language="text",
+            )
+
             # 尝试读取脚本前50行
             try:
-                with open(process_info['script_path'], 'r', encoding='utf-8') as f:
+                with open(process_info["script_path"], "r", encoding="utf-8") as f:
                     script_lines = f.readlines()[:50]
                 st.subheader("📄 脚本内容预览 (前50行)")
-                st.code(''.join(script_lines), language="python")
+                st.code("".join(script_lines), language="python")
             except Exception as e:
                 st.error(f"无法读取脚本: {e}")
-            
+
             # 检查进程状态详情
             try:
-                process = process_info['process']
+                process = process_info["process"]
                 poll_result = process.poll()
                 if poll_result is not None:
                     stdout, stderr = process.communicate()
@@ -2079,4 +2317,4 @@ if not input_ready:
     if input_method == "上传新文件":
         st.info("👆 请上传包含3D构象的SDF文件开始使用")
     else:
-        st.info("👆 请选择已保存的SDF文件开始使用") 
+        st.info("👆 请选择已保存的SDF文件开始使用")

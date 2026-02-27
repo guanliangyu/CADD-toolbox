@@ -32,17 +32,19 @@ def get_max_available_cpus() -> int:
     return max(1, int(cpu_count))
 
 
-def _init_tanimoto_worker(shm_name: str, shape: tuple[int, int], dtype_str: str) -> None:
+def _init_tanimoto_worker(
+    shm_name: str, shape: tuple[int, int], dtype_str: str
+) -> None:
     """初始化 Tanimoto worker 的共享内存视图"""
     global _TANIMOTO_SHARED_FPS, _TANIMOTO_SHARED_MEM
     _TANIMOTO_SHARED_MEM = shared_memory.SharedMemory(name=shm_name)
-    _TANIMOTO_SHARED_FPS = np.ndarray(shape, dtype=np.dtype(dtype_str), buffer=_TANIMOTO_SHARED_MEM.buf)
+    _TANIMOTO_SHARED_FPS = np.ndarray(
+        shape, dtype=np.dtype(dtype_str), buffer=_TANIMOTO_SHARED_MEM.buf
+    )
 
 
 def _compute_tanimoto_chunk(
-    fps: np.ndarray,
-    row_start: int,
-    row_end: int
+    fps: np.ndarray, row_start: int, row_end: int
 ) -> tuple[int, int, np.ndarray]:
     """计算 [row_start, row_end) 行对应的上三角 Tanimoto 相似性"""
     n_samples = fps.shape[0]
@@ -99,7 +101,10 @@ def compute_tanimoto_similarity_matrix(
     n_jobs = min(n_jobs, get_max_available_cpus())
     chunk_rows = max(16, int(chunk_rows))
 
-    row_ranges = [(start, min(start + chunk_rows, n_samples)) for start in range(0, n_samples, chunk_rows)]
+    row_ranges = [
+        (start, min(start + chunk_rows, n_samples))
+        for start in range(0, n_samples, chunk_rows)
+    ]
     n_tasks = len(row_ranges)
     similarity_matrix = np.zeros((n_samples, n_samples), dtype=np.float32)
 
@@ -110,7 +115,9 @@ def compute_tanimoto_similarity_matrix(
     if n_jobs == 1 or n_tasks == 1:
         for idx, (row_start, row_end) in enumerate(row_ranges, start=1):
             if status_callback is not None:
-                status_callback(f"Tanimoto单进程计算: {row_start:,}-{row_end:,}/{n_samples:,}")
+                status_callback(
+                    f"Tanimoto单进程计算: {row_start:,}-{row_end:,}/{n_samples:,}"
+                )
             _, _, chunk = _compute_tanimoto_chunk(fps, row_start, row_end)
             similarity_matrix[row_start:row_end, :] = chunk
             _update_progress(idx)
@@ -128,7 +135,10 @@ def compute_tanimoto_similarity_matrix(
                 initializer=_init_tanimoto_worker,
                 initargs=(shm.name, fps.shape, fps.dtype.str),
             ) as executor:
-                futures = [executor.submit(_tanimoto_chunk_worker, row_start, row_end) for row_start, row_end in row_ranges]
+                futures = [
+                    executor.submit(_tanimoto_chunk_worker, row_start, row_end)
+                    for row_start, row_end in row_ranges
+                ]
                 for idx, future in enumerate(as_completed(futures), start=1):
                     row_start, row_end, chunk = future.result()
                     similarity_matrix[row_start:row_end, :] = chunk
@@ -141,14 +151,18 @@ def compute_tanimoto_similarity_matrix(
             try:
                 with ThreadPoolExecutor(max_workers=n_jobs) as executor:
                     futures = [
-                        executor.submit(_compute_tanimoto_chunk, fps, row_start, row_end)
+                        executor.submit(
+                            _compute_tanimoto_chunk, fps, row_start, row_end
+                        )
                         for row_start, row_end in row_ranges
                     ]
                     for idx, future in enumerate(as_completed(futures), start=1):
                         row_start, row_end, chunk = future.result()
                         similarity_matrix[row_start:row_end, :] = chunk
                         if status_callback is not None:
-                            status_callback(f"Tanimoto多线程计算进度: {idx}/{n_tasks} 块")
+                            status_callback(
+                                f"Tanimoto多线程计算进度: {idx}/{n_tasks} 块"
+                            )
                         _update_progress(idx)
             except Exception as e2:
                 if status_callback is not None:
@@ -170,4 +184,3 @@ def compute_tanimoto_similarity_matrix(
 
     upper = np.triu(similarity_matrix)
     return upper + upper.T - np.diag(np.diag(upper))
-

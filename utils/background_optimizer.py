@@ -10,24 +10,26 @@ import argparse
 import subprocess
 from datetime import datetime
 
+
 def create_background_optimizer_script(
     input_file,
     output_dir,
     processing_limit=100000,
     num_threads=None,
     optimization_steps=1000,
-    script_name=None
+    script_name=None,
 ):
     """创建后台优化脚本"""
-    
+
     if num_threads is None:
         import multiprocessing
+
         num_threads = min(36, multiprocessing.cpu_count() * 2)
-    
+
     if script_name is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         script_name = f"background_optimize_{timestamp}"
-    
+
     script_content = f'''#!/usr/bin/env python3
 """
 后台分子构象优化脚本 - 独立运行
@@ -476,107 +478,111 @@ if __name__ == "__main__":
 
     return script_content, script_name
 
+
 def run_background_optimization(
     input_file,
     output_dir,
     processing_limit=100000,
     num_threads=None,
     optimization_steps=1000,
-    detached=True
+    detached=True,
 ):
     """运行后台优化"""
-    
+
     # 创建脚本
     script_content, script_name = create_background_optimizer_script(
         input_file=input_file,
         output_dir=output_dir,
         processing_limit=processing_limit,
         num_threads=num_threads,
-        optimization_steps=optimization_steps
+        optimization_steps=optimization_steps,
     )
-    
+
     # 保存脚本文件
     script_file = os.path.join(output_dir, f"{script_name}.py")
-    with open(script_file, 'w') as f:
+    with open(script_file, "w") as f:
         f.write(script_content)
-    
+
     # 使脚本可执行
     os.chmod(script_file, 0o755)
-    
+
     print(f"✅ 后台优化脚本已创建: {script_file}")
-    
+
     if detached:
         # 在后台运行脚本
         log_file = os.path.join(output_dir, f"{script_name}_output.log")
-        
+
         # 使用nohup在后台运行
         cmd = f"nohup python {script_file} > {log_file} 2>&1 &"
-        
+
         print("🚀 启动后台进程...")
         print(f"📝 日志文件: {log_file}")
         print(f"🔍 监控命令: tail -f {log_file}")
         print(f"⛔ 停止命令: pkill -f {script_name}")
-        
+
         os.system(cmd)
-        
+
         # 获取进程ID
         time.sleep(1)
         pid_cmd = f"pgrep -f {script_name}"
         pid_result = subprocess.run(pid_cmd, shell=True, capture_output=True, text=True)
-        
+
         if pid_result.returncode == 0:
             pid = pid_result.stdout.strip()
             print(f"✅ 后台进程已启动，PID: {pid}")
-            
+
             # 保存PID文件
             pid_file = os.path.join(output_dir, f"{script_name}.pid")
-            with open(pid_file, 'w') as f:
+            with open(pid_file, "w") as f:
                 f.write(pid)
         else:
             print("⚠️ 无法获取进程ID，但脚本可能正在运行")
     else:
         print(f"📋 手动运行命令: python {script_file}")
-    
+
     return script_file, script_name
+
 
 def check_background_status(output_dir, script_name):
     """检查后台任务状态"""
-    
+
     # 检查PID文件
     pid_file = os.path.join(output_dir, f"{script_name}.pid")
     if os.path.exists(pid_file):
-        with open(pid_file, 'r') as f:
+        with open(pid_file, "r") as f:
             pid = f.read().strip()
-        
+
         # 检查进程是否还在运行
         try:
             import psutil
+
             if psutil.pid_exists(int(pid)):
                 process = psutil.Process(int(pid))
                 return {
-                    'status': 'running',
-                    'pid': pid,
-                    'cpu_percent': process.cpu_percent(),
-                    'memory_mb': process.memory_info().rss / 1024 / 1024
+                    "status": "running",
+                    "pid": pid,
+                    "cpu_percent": process.cpu_percent(),
+                    "memory_mb": process.memory_info().rss / 1024 / 1024,
                 }
         except Exception:
             pass
-    
+
     # 检查完成标志
     completion_file = os.path.join(output_dir, f"{script_name}.completed")
     if os.path.exists(completion_file):
-        with open(completion_file, 'r') as f:
+        with open(completion_file, "r") as f:
             content = f.read()
-        return {'status': 'completed', 'details': content}
-    
+        return {"status": "completed", "details": content}
+
     # 检查错误标志
     error_file = os.path.join(output_dir, f"{script_name}.error")
     if os.path.exists(error_file):
-        with open(error_file, 'r') as f:
+        with open(error_file, "r") as f:
             content = f.read()
-        return {'status': 'error', 'details': content}
-    
-    return {'status': 'unknown'}
+        return {"status": "error", "details": content}
+
+    return {"status": "unknown"}
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="后台构象优化工具")
@@ -586,14 +592,14 @@ if __name__ == "__main__":
     parser.add_argument("--threads", type=int, help="线程数")
     parser.add_argument("--steps", type=int, default=1000, help="优化步数")
     parser.add_argument("--no-detach", action="store_true", help="不在后台运行")
-    
+
     args = parser.parse_args()
-    
+
     run_background_optimization(
         input_file=args.input_file,
         output_dir=args.output_dir,
         processing_limit=args.limit,
         num_threads=args.threads,
         optimization_steps=args.steps,
-        detached=not args.no_detach
-    ) 
+        detached=not args.no_detach,
+    )

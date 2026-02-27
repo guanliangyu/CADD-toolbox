@@ -8,7 +8,10 @@ import numpy as np
 import streamlit as st
 from sklearn.neighbors import NearestNeighbors
 
-from utils.structure_diversity_data import build_array_signature, ensure_faiss_compatible
+from utils.structure_diversity_data import (
+    build_array_signature,
+    ensure_faiss_compatible,
+)
 from utils.tanimoto_parallel import compute_tanimoto_similarity_matrix
 
 try:
@@ -84,7 +87,9 @@ def cached_pairwise_similarity(
     """带会话缓存的随机采样成对相似性计算"""
     cache = st.session_state.setdefault("metric_cache", {})
     sig = dataset_sig or build_array_signature(fps)
-    key = _build_metric_cache_key("pair", sig, metric=metric, n_pairs=n_pairs, seed=seed)
+    key = _build_metric_cache_key(
+        "pair", sig, metric=metric, n_pairs=n_pairs, seed=seed
+    )
 
     if key in cache:
         st.info("♻️ 命中缓存: 成对采样相似性")
@@ -136,7 +141,9 @@ def _compute_similarity_matrix_gpu_blockwise(
             for start in range(0, n_samples, block_rows):
                 end = min(start + block_rows, n_samples)
                 if status_text is not None:
-                    status_text.text(f"使用GPU分块计算余弦相似度: {start:,}-{end:,}/{n_samples:,}")
+                    status_text.text(
+                        f"使用GPU分块计算余弦相似度: {start:,}-{end:,}/{n_samples:,}"
+                    )
                 block = fps_gpu[start:end]
                 sim_block = block @ fps_gpu.T
                 sim_matrix[start:end] = cp.asnumpy(sim_block)
@@ -151,7 +158,9 @@ def _compute_similarity_matrix_gpu_blockwise(
             for start in range(0, n_samples, block_rows):
                 end = min(start + block_rows, n_samples)
                 if status_text is not None:
-                    status_text.text(f"使用GPU分块计算欧氏距离: {start:,}-{end:,}/{n_samples:,}")
+                    status_text.text(
+                        f"使用GPU分块计算欧氏距离: {start:,}-{end:,}/{n_samples:,}"
+                    )
                 block = fps_gpu[start:end]
                 gram = block @ fps_gpu.T
                 block_sq = sq_norms[start:end][:, None]
@@ -219,12 +228,16 @@ def knn_similarity(
         if metric == "cosine":
             faiss.normalize_L2(fps_copy)
             if use_gpu and faiss.get_num_gpus() > 0:
-                index = faiss.index_cpu_to_all_gpus(faiss.IndexFlatIP(fps_copy.shape[1]))
+                index = faiss.index_cpu_to_all_gpus(
+                    faiss.IndexFlatIP(fps_copy.shape[1])
+                )
             else:
                 index = faiss.IndexFlatIP(fps_copy.shape[1])
         else:
             if use_gpu and faiss.get_num_gpus() > 0:
-                index = faiss.index_cpu_to_all_gpus(faiss.IndexFlatL2(fps_copy.shape[1]))
+                index = faiss.index_cpu_to_all_gpus(
+                    faiss.IndexFlatL2(fps_copy.shape[1])
+                )
             else:
                 index = faiss.IndexFlatL2(fps_copy.shape[1])
 
@@ -326,7 +339,9 @@ def compute_similarity_matrix_from_fingerprints(
             similarity_matrix = None
             if use_gpu:
                 try:
-                    status_text.text(f"使用GPU计算 {n_samples}x{n_samples} 相似性矩阵...")
+                    status_text.text(
+                        f"使用GPU计算 {n_samples}x{n_samples} 相似性矩阵..."
+                    )
                     similarity_matrix = _compute_similarity_matrix_gpu_blockwise(
                         fingerprints,
                         metric=metric,
@@ -408,7 +423,9 @@ def diversity_stats(knn_sim: np.ndarray, pair_sim: np.ndarray) -> dict[str, floa
             )
 
             try:
-                hist, _ = np.histogram(valid_pairs, bins=100, range=(0, 1), density=True)
+                hist, _ = np.histogram(
+                    valid_pairs, bins=100, range=(0, 1), density=True
+                )
                 p = hist / (hist.sum() + 1e-12)
                 p = p[p > 1e-12]
                 stats["Shannon_Entropy"] = -(p * np.log2(p)).sum()

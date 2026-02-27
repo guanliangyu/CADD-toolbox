@@ -45,14 +45,22 @@ def list_data_folders(data_dir: str | Path = "data") -> list[str]:
     return sorted([item.name for item in base_dir.iterdir() if item.is_dir()])
 
 
-def list_csv_files_in_folder(folder_name: str, data_dir: str | Path = "data") -> list[str]:
+def list_csv_files_in_folder(
+    folder_name: str, data_dir: str | Path = "data"
+) -> list[str]:
     """列出指定文件夹中的 CSV 文件"""
     if not folder_name:
         return []
     folder_path = Path(data_dir) / folder_name
     if not folder_path.exists() or not folder_path.is_dir():
         return []
-    return sorted([item.name for item in folder_path.iterdir() if item.is_file() and item.suffix.lower() == ".csv"])
+    return sorted(
+        [
+            item.name
+            for item in folder_path.iterdir()
+            if item.is_file() and item.suffix.lower() == ".csv"
+        ]
+    )
 
 
 def validate_folder_name(folder_name: str) -> tuple[bool, str]:
@@ -116,7 +124,9 @@ def save_uploaded_csv_to_data(
         raise ValueError("未提供上传文件")
 
     folder_path = create_data_subfolder(folder_name, data_dir=data_dir)
-    file_name = sanitize_uploaded_filename(filename or getattr(uploaded_file, "name", "uploaded.csv"))
+    file_name = sanitize_uploaded_filename(
+        filename or getattr(uploaded_file, "name", "uploaded.csv")
+    )
     target_path = folder_path / file_name
     if target_path.exists() and not overwrite:
         target_path = _build_unique_file_path(target_path)
@@ -165,7 +175,9 @@ def _iter_separators(detected_separator: str) -> list[str]:
     return ordered
 
 
-def _looks_like_wrong_separator(df: pd.DataFrame, sample_text: str, separator: str) -> bool:
+def _looks_like_wrong_separator(
+    df: pd.DataFrame, sample_text: str, separator: str
+) -> bool:
     """
     判断分隔符是否疑似错误
 
@@ -295,10 +307,14 @@ def load_csv_from_bytes(
                 last_error = exc
                 continue
 
-    raise ValueError(f"无法解析 CSV 文件，请检查编码或分隔符。原始错误: {last_error}") from last_error
+    raise ValueError(
+        f"无法解析 CSV 文件，请检查编码或分隔符。原始错误: {last_error}"
+    ) from last_error
 
 
-def load_uploaded_csv(uploaded_file, nrows: int | None = None) -> tuple[pd.DataFrame, CsvLoadMeta]:
+def load_uploaded_csv(
+    uploaded_file, nrows: int | None = None
+) -> tuple[pd.DataFrame, CsvLoadMeta]:
     """读取 Streamlit 上传的 CSV 文件对象"""
     if uploaded_file is None:
         raise ValueError("未提供上传文件")
@@ -310,10 +326,14 @@ def load_uploaded_csv(uploaded_file, nrows: int | None = None) -> tuple[pd.DataF
         uploaded_file.seek(0)
 
     source_name = getattr(uploaded_file, "name", "uploaded.csv")
-    return load_csv_from_bytes(csv_bytes=csv_bytes, source_name=source_name, nrows=nrows)
+    return load_csv_from_bytes(
+        csv_bytes=csv_bytes, source_name=source_name, nrows=nrows
+    )
 
 
-def load_csv_from_path(file_path: str | Path, nrows: int | None = None) -> tuple[pd.DataFrame, CsvLoadMeta]:
+def load_csv_from_path(
+    file_path: str | Path, nrows: int | None = None
+) -> tuple[pd.DataFrame, CsvLoadMeta]:
     """从本地路径读取 CSV 文件"""
     path = Path(file_path)
     if not path.exists() or not path.is_file():
@@ -369,7 +389,9 @@ def load_csv_from_path(file_path: str | Path, nrows: int | None = None) -> tuple
                 last_error = exc
                 continue
 
-    raise ValueError(f"无法解析 CSV 文件，请检查编码或分隔符。原始错误: {last_error}") from last_error
+    raise ValueError(
+        f"无法解析 CSV 文件，请检查编码或分隔符。原始错误: {last_error}"
+    ) from last_error
 
 
 def _strip_outer_quotes(text: str) -> str:
@@ -516,7 +538,9 @@ def standardize_multi_value_series(
         elif mode == "selected":
             if selected_value is None or selected_value == "":
                 raise ValueError("mode='selected' 时必须提供 selected_value")
-            normalized_values.append(selected_value if selected_value in set(tokens) else pd.NA)
+            normalized_values.append(
+                selected_value if selected_value in set(tokens) else pd.NA
+            )
         else:
             raise ValueError(f"不支持的标准化模式: {mode}")
 

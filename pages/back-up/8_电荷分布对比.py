@@ -1,6 +1,7 @@
 """
 分子库代表性子集选择系统 - 电荷分布对比页面
 """
+
 import os
 import sys
 import random
@@ -18,6 +19,7 @@ from multiprocessing import cpu_count
 
 try:
     import umap
+
     HAS_UMAP = True
 except ImportError:
     HAS_UMAP = False
@@ -28,9 +30,7 @@ sys.path.append(script_dir)
 
 # 设置页面
 st.set_page_config(
-    page_title="分子库代表性子集选择系统 - 电荷分布对比",
-    page_icon="⚡",
-    layout="wide"
+    page_title="分子库代表性子集选择系统 - 电荷分布对比", page_icon="⚡", layout="wide"
 )
 
 # 检查CUDA是否可用
@@ -52,14 +52,15 @@ st.sidebar.info(f"将使用 {N_JOBS} 个CPU核心进行并行计算")
 
 st.title("电荷分布对比")
 
-def load_smiles(file, smiles_col='SMILES'):
+
+def load_smiles(file, smiles_col="SMILES"):
     """从CSV读取SMILES并转换为RDKit Mol对象"""
     try:
         df = pd.read_csv(file)
         if smiles_col not in df.columns:
             st.error(f"未找到SMILES列: {smiles_col}")
             return None, None
-        
+
         mols = []
         valid_indices = []
         for i, row in df.iterrows():
@@ -68,11 +69,12 @@ def load_smiles(file, smiles_col='SMILES'):
             if mol:
                 mols.append(mol)
                 valid_indices.append(i)
-        
+
         return mols, df.iloc[valid_indices]
     except Exception as e:
         st.error(f"读取CSV文件时出错: {str(e)}")
         return None, None
+
 
 def compute_gasteiger_charges(mol):
     """计算Gasteiger部分电荷"""
@@ -82,7 +84,7 @@ def compute_gasteiger_charges(mol):
         for atom in mol.GetAtoms():
             if atom.HasProp("_GasteigerCharge"):
                 val = atom.GetProp("_GasteigerCharge")
-                if val == 'nan':
+                if val == "nan":
                     charges.append(0.0)
                 else:
                     charges.append(float(val))
@@ -92,14 +94,15 @@ def compute_gasteiger_charges(mol):
     except Exception:
         return None
 
+
 def calc_dipole_moment(mol, charges):
     """计算偶极矩（Debye）"""
     DIP_CONST = 4.80298
-    
+
     conf = mol.GetConformer()
     if conf is None:
         return 0.0
-    
+
     dip_x, dip_y, dip_z = 0.0, 0.0, 0.0
     for i, atom in enumerate(mol.GetAtoms()):
         pos = conf.GetAtomPosition(i)
@@ -107,10 +110,11 @@ def calc_dipole_moment(mol, charges):
         dip_x += q * pos.x
         dip_y += q * pos.y
         dip_z += q * pos.z
-    
+
     dip = np.sqrt(dip_x**2 + dip_y**2 + dip_z**2)
     dip_debye = dip * DIP_CONST
     return dip_debye
+
 
 def calc_charge_features(mol):
     """计算分子的电荷相关特征"""
@@ -122,22 +126,23 @@ def calc_charge_features(mol):
         except Exception:
             pass
         mol = mol3d
-    
+
     charges = compute_gasteiger_charges(mol)
     if not charges:
         return None
-    
+
     max_charge = max(charges)
     min_charge = min(charges)
     total_charge = sum(charges)
     dipole = calc_dipole_moment(mol, charges)
-    
+
     return {
         "max_charge": max_charge,
         "min_charge": min_charge,
         "total_charge": total_charge,
-        "dipole": dipole
+        "dipole": dipole,
     }
+
 
 def calc_peoe_vsa_descriptors(mol):
     """计算PEOE_VSA描述符"""
@@ -147,18 +152,19 @@ def calc_peoe_vsa_descriptors(mol):
     except Exception:
         return None
 
+
 def assemble_electrostatic_df(mols, max_samples=1000):
     """组装电荷特征数据框"""
     if len(mols) > max_samples:
         mols = random.sample(mols, max_samples)
-    
+
     records = []
     for mol in mols:
         feats_charge = calc_charge_features(mol)
         if feats_charge is None:
             continue
         peoe_vals = calc_peoe_vsa_descriptors(mol)
-        
+
         row = {
             "max_charge": feats_charge["max_charge"],
             "min_charge": feats_charge["min_charge"],
@@ -169,9 +175,10 @@ def assemble_electrostatic_df(mols, max_samples=1000):
             for i, val in enumerate(peoe_vals, start=1):
                 row[f"PEOE_VSA{i}"] = val
         records.append(row)
-    
+
     df = pd.DataFrame(records)
     return df
+
 
 def plot_dimensionality_reduction(dfA, dfB, cols, title, method="PCA"):
     """降维可视化"""
@@ -179,28 +186,31 @@ def plot_dimensionality_reduction(dfA, dfB, cols, title, method="PCA"):
     dfB["_label"] = "B"
     df_all = pd.concat([dfA, dfB], ignore_index=True)
     df_all = df_all.dropna(subset=cols)
-    
+
     X = df_all[cols].values
     labels = df_all["_label"].values
-    
+
     if method == "PCA":
         reducer = PCA(n_components=2)
     else:  # UMAP
-        reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, n_components=2, random_state=42)
-    
+        reducer = umap.UMAP(
+            n_neighbors=15, min_dist=0.1, n_components=2, random_state=42
+        )
+
     coords = reducer.fit_transform(X)
-    xvals = coords[:,0]
-    yvals = coords[:,1]
-    
+    xvals = coords[:, 0]
+    yvals = coords[:, 1]
+
     fig, ax = plt.subplots(figsize=(10, 8))
-    cA = (labels == "A")
-    cB = (labels == "B")
-    ax.scatter(xvals[cA], yvals[cA], c='blue', alpha=0.5, label="数据集A", s=10)
-    ax.scatter(xvals[cB], yvals[cB], c='red', alpha=0.5, label="数据集B", s=10)
+    cA = labels == "A"
+    cB = labels == "B"
+    ax.scatter(xvals[cA], yvals[cA], c="blue", alpha=0.5, label="数据集A", s=10)
+    ax.scatter(xvals[cB], yvals[cB], c="red", alpha=0.5, label="数据集B", s=10)
     ax.set_title(title)
     ax.legend()
     plt.tight_layout()
     return fig
+
 
 # 主界面
 col1, col2 = st.columns(2)
@@ -208,7 +218,7 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("数据集A")
     fileA = st.file_uploader("上传第一个CSV文件", type="csv")
-    
+
 with col2:
     st.subheader("数据集B")
     fileB = st.file_uploader("上传第二个CSV文件", type="csv")
@@ -231,57 +241,67 @@ if st.button("开始分析") and fileA is not None and fileB is not None:
             # 加载分子
             molsA, dfA = load_smiles(fileA, smiles_col)
             molsB, dfB = load_smiles(fileB, smiles_col)
-            
+
             if molsA and molsB:
-                st.success(f"成功加载: 数据集A {len(molsA)}个分子, 数据集B {len(molsB)}个分子")
-                
+                st.success(
+                    f"成功加载: 数据集A {len(molsA)}个分子, 数据集B {len(molsB)}个分子"
+                )
+
                 # 计算电荷特征
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
+
                 # 处理数据集A
                 status_text.text("正在处理数据集A...")
                 dfA_elec = assemble_electrostatic_df(molsA, max_samples)
                 progress_bar.progress(0.5)
-                
+
                 # 处理数据集B
                 status_text.text("正在处理数据集B...")
                 dfB_elec = assemble_electrostatic_df(molsB, max_samples)
                 progress_bar.progress(1.0)
-                
+
                 status_text.text("分析完成！")
-                
+
                 # 显示结果
                 st.subheader("基本统计")
-                
+
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
                     st.write("数据集A统计:")
-                    st.write(dfA_elec[["max_charge", "min_charge", "total_charge", "dipole"]].describe())
-                
+                    st.write(
+                        dfA_elec[
+                            ["max_charge", "min_charge", "total_charge", "dipole"]
+                        ].describe()
+                    )
+
                 with col2:
                     st.write("数据集B统计:")
-                    st.write(dfB_elec[["max_charge", "min_charge", "total_charge", "dipole"]].describe())
-                
+                    st.write(
+                        dfB_elec[
+                            ["max_charge", "min_charge", "total_charge", "dipole"]
+                        ].describe()
+                    )
+
                 # 电荷分布可视化
                 st.subheader("电荷分布可视化")
-                
+
                 # 准备特征列
                 base_cols = ["dipole", "max_charge", "min_charge", "total_charge"]
                 vsa_cols = [f"PEOE_VSA{i}" for i in range(1, n_peoe_vsa + 1)]
                 all_cols = base_cols + vsa_cols
-                
+
                 # 降维可视化
                 fig = plot_dimensionality_reduction(
-                    dfA_elec.copy(), 
-                    dfB_elec.copy(), 
+                    dfA_elec.copy(),
+                    dfB_elec.copy(),
                     all_cols,
                     f"{viz_method} (电荷 + PEOE_VSA特征)",
-                    method=viz_method
+                    method=viz_method,
                 )
                 st.pyplot(fig)
-                
+
                 # 偶极矩分布
                 st.subheader("偶极矩分布")
                 fig, ax = plt.subplots(figsize=(10, 6))
@@ -291,21 +311,27 @@ if st.button("开始分析") and fileA is not None and fileB is not None:
                 ax.set_ylabel("密度")
                 ax.legend()
                 st.pyplot(fig)
-                
+
                 # 电荷范围分布
                 st.subheader("电荷范围分布")
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-                
-                sns.boxplot(data=[dfA_elec["max_charge"], dfB_elec["max_charge"]], 
-                          labels=["数据集A", "数据集B"], ax=ax1)
+
+                sns.boxplot(
+                    data=[dfA_elec["max_charge"], dfB_elec["max_charge"]],
+                    labels=["数据集A", "数据集B"],
+                    ax=ax1,
+                )
                 ax1.set_title("最大正电荷分布")
-                
-                sns.boxplot(data=[dfA_elec["min_charge"], dfB_elec["min_charge"]], 
-                          labels=["数据集A", "数据集B"], ax=ax2)
+
+                sns.boxplot(
+                    data=[dfA_elec["min_charge"], dfB_elec["min_charge"]],
+                    labels=["数据集A", "数据集B"],
+                    ax=ax2,
+                )
                 ax2.set_title("最小负电荷分布")
-                
+
                 plt.tight_layout()
                 st.pyplot(fig)
-                
+
         except Exception as e:
-            st.error(f"分析过程中出错: {str(e)}") 
+            st.error(f"分析过程中出错: {str(e)}")

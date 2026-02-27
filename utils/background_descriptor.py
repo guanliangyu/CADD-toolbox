@@ -11,6 +11,7 @@ import argparse
 import subprocess
 from datetime import datetime
 
+
 def create_background_descriptor_script(
     input_file,
     output_dir,
@@ -19,24 +20,25 @@ def create_background_descriptor_script(
     include_3d=True,
     aggregation_method="mean",
     include_smiles=True,
-    script_name=None
+    script_name=None,
 ):
     """创建后台描述符计算脚本"""
-    
+
     if num_workers is None:
         import multiprocessing
+
         num_workers = min(34, multiprocessing.cpu_count() * 2)
-    
+
     if script_name is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         script_name = f"background_descriptor_{timestamp}"
-    
+
     # 处理processing_limit参数
-    if processing_limit == float('inf'):
+    if processing_limit == float("inf"):
         processing_limit_str = "float('inf')"
     else:
         processing_limit_str = str(processing_limit)
-    
+
     script_content = f'''#!/usr/bin/env python3
 """
 后台3D分子描述符计算脚本 - 独立运行
@@ -514,6 +516,7 @@ if __name__ == "__main__":
 
     return script_content, script_name
 
+
 def run_background_descriptor_calculation(
     input_file,
     output_dir,
@@ -522,10 +525,10 @@ def run_background_descriptor_calculation(
     include_3d=True,
     aggregation_method="mean",
     include_smiles=True,
-    detached=True
+    detached=True,
 ):
     """运行后台描述符计算"""
-    
+
     # 创建脚本
     script_content, script_name = create_background_descriptor_script(
         input_file=input_file,
@@ -534,41 +537,41 @@ def run_background_descriptor_calculation(
         num_workers=num_workers,
         include_3d=include_3d,
         aggregation_method=aggregation_method,
-        include_smiles=include_smiles
+        include_smiles=include_smiles,
     )
-    
+
     # 保存脚本文件
     script_file = os.path.join(output_dir, f"{script_name}.py")
-    with open(script_file, 'w') as f:
+    with open(script_file, "w") as f:
         f.write(script_content)
-    
+
     # 使脚本可执行
     os.chmod(script_file, 0o755)
-    
+
     print(f"✅ 后台描述符计算脚本已创建: {script_file}")
-    
+
     if detached:
         # 在后台运行脚本
         log_file = os.path.join(output_dir, f"{script_name}_output.log")
-        
+
         # 检测conda环境
-        conda_env = os.environ.get('CONDA_DEFAULT_ENV', 'base')
+        conda_env = os.environ.get("CONDA_DEFAULT_ENV", "base")
         python_path = sys.executable  # 使用当前Python解释器路径
-        
+
         # 使用conda run确保在正确环境中运行
-        if conda_env and conda_env != 'base':
+        if conda_env and conda_env != "base":
             cmd = f"nohup conda run -n {conda_env} python {script_file} > {log_file} 2>&1 &"
         else:
             # 直接使用当前Python解释器
             cmd = f"nohup {python_path} {script_file} > {log_file} 2>&1 &"
-        
+
         print("🚀 启动后台进程...")
         print(f"🐍 Python环境: {conda_env} ({python_path})")
         print(f"📝 日志文件: {log_file}")
         print(f"💻 执行命令: {cmd}")
         print(f"🔍 监控命令: tail -f {log_file}")
         print(f"⛔ 停止命令: pkill -f {script_name}")
-        
+
         # 使用subprocess而不是os.system以便更好的错误处理
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if result.returncode != 0:
@@ -577,65 +580,68 @@ def run_background_descriptor_calculation(
                 print(f"❌ 错误信息: {result.stderr}")
         else:
             print("✅ 后台命令已提交")
-        
+
         # 获取进程ID
         time.sleep(1)
         pid_cmd = f"pgrep -f {script_name}"
         pid_result = subprocess.run(pid_cmd, shell=True, capture_output=True, text=True)
-        
+
         if pid_result.returncode == 0:
             pid = pid_result.stdout.strip()
             print(f"✅ 后台进程已启动，PID: {pid}")
-            
+
             # 保存PID文件
             pid_file = os.path.join(output_dir, f"{script_name}_pid.txt")
-            with open(pid_file, 'w') as f:
+            with open(pid_file, "w") as f:
                 f.write(pid)
         else:
             print("⚠️ 无法获取进程ID，但脚本可能正在运行")
     else:
         print(f"📋 手动运行命令: python {script_file}")
-    
+
     return script_file, script_name
+
 
 def check_background_descriptor_status(output_dir, script_name):
     """检查后台描述符计算任务状态"""
-    
+
     # 检查PID文件
     pid_file = os.path.join(output_dir, f"{script_name}_pid.txt")
     if os.path.exists(pid_file):
-        with open(pid_file, 'r') as f:
+        with open(pid_file, "r") as f:
             pid = f.read().strip()
-        
+
         # 检查进程是否还在运行
         try:
             import psutil
+
             if psutil.pid_exists(int(pid)):
                 process = psutil.Process(int(pid))
                 return {
-                    'status': 'running',
-                    'pid': pid,
-                    'cpu_percent': process.cpu_percent(),
-                    'memory_mb': process.memory_info().rss / 1024 / 1024
+                    "status": "running",
+                    "pid": pid,
+                    "cpu_percent": process.cpu_percent(),
+                    "memory_mb": process.memory_info().rss / 1024 / 1024,
                 }
         except Exception:
             pass
-    
+
     # 检查完成标志
     completion_file = os.path.join(output_dir, f"{script_name}_completed.txt")
     if os.path.exists(completion_file):
-        with open(completion_file, 'r') as f:
+        with open(completion_file, "r") as f:
             content = f.read()
-        return {'status': 'completed', 'details': content}
-    
+        return {"status": "completed", "details": content}
+
     # 检查错误标志
     error_file = os.path.join(output_dir, f"{script_name}_error.txt")
     if os.path.exists(error_file):
-        with open(error_file, 'r') as f:
+        with open(error_file, "r") as f:
             content = f.read()
-        return {'status': 'error', 'details': content}
-    
-    return {'status': 'unknown'}
+        return {"status": "error", "details": content}
+
+    return {"status": "unknown"}
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="后台3D描述符计算工具")
@@ -647,9 +653,9 @@ if __name__ == "__main__":
     parser.add_argument("--aggregation", default="mean", help="聚合方法")
     parser.add_argument("--no-smiles", action="store_true", help="不包含SMILES")
     parser.add_argument("--no-detach", action="store_true", help="不在后台运行")
-    
+
     args = parser.parse_args()
-    
+
     run_background_descriptor_calculation(
         input_file=args.input_file,
         output_dir=args.output_dir,
@@ -658,5 +664,5 @@ if __name__ == "__main__":
         include_3d=not args.no_3d,
         aggregation_method=args.aggregation,
         include_smiles=not args.no_smiles,
-        detached=not args.no_detach
-    ) 
+        detached=not args.no_detach,
+    )

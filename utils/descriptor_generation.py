@@ -1,4 +1,5 @@
 """2D分子描述符与指纹生成工具模块"""
+
 from __future__ import annotations
 
 import logging
@@ -9,8 +10,10 @@ import pandas as pd
 from rdkit import Chem, DataStructs
 from rdkit.Chem import Descriptors, rdMolDescriptors
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
+
 try:
     from rdkit.Chem.Avalon import pyAvalonTools  # type: ignore
+
     AVALON_AVAILABLE = True
 except ImportError:
     pyAvalonTools = None  # type: ignore
@@ -30,7 +33,9 @@ __all__ = [
 ]
 
 
-def build_molecule_cache(smiles_series: pd.Series) -> Tuple[List[Optional[Chem.Mol]], pd.Series]:
+def build_molecule_cache(
+    smiles_series: pd.Series,
+) -> Tuple[List[Optional[Chem.Mol]], pd.Series]:
     """预解析SMILES以缓存对应的RDKit分子对象"""
     mols: List[Optional[Chem.Mol]] = []
     valid_flags = np.zeros(len(smiles_series), dtype=bool)
@@ -192,7 +197,9 @@ def generate_fingerprints(
                 elif fp_type == "atompairs":
                     fp = Pairs.GetAtomPairFingerprintAsBitVect(mol, nBits=bit_length)
                 elif fp_type == "torsions":
-                    fp = Torsions.GetTopologicalTorsionFingerprintAsBitVect(mol, nBits=bit_length)
+                    fp = Torsions.GetTopologicalTorsionFingerprintAsBitVect(
+                        mol, nBits=bit_length
+                    )
                 else:
                     generator = GetMorganGenerator(radius=radius, fpSize=nbits)
                     fp = generator.GetFingerprint(mol)
@@ -252,7 +259,9 @@ def merge_feature_frames(
     return combined
 
 
-def _resolve_smiles_column_name(columns: Sequence[str], preferred: str | None = None) -> str | None:
+def _resolve_smiles_column_name(
+    columns: Sequence[str], preferred: str | None = None
+) -> str | None:
     """根据优先列名与常见别名解析SMILES列名"""
     column_list = [str(col) for col in columns]
     if preferred and preferred in column_list:
@@ -282,12 +291,12 @@ def _resolve_smiles_column_name(columns: Sequence[str], preferred: str | None = 
     return None
 
 
-def process_chunk_worker(
-    args: Tuple[Any, ...]
-) -> pd.DataFrame:
+def process_chunk_worker(args: Tuple[Any, ...]) -> pd.DataFrame:
     """子进程处理器：根据配置批量生成描述符并返回结果"""
     if len(args) >= 5:
-        chunk_records, descriptor_types, fingerprint_types, fp_config, smiles_column = args[:5]
+        chunk_records, descriptor_types, fingerprint_types, fp_config, smiles_column = (
+            args[:5]
+        )
     else:
         chunk_records, descriptor_types, fingerprint_types, fp_config = args
         smiles_column = None
@@ -300,7 +309,9 @@ def process_chunk_worker(
     row_ids = chunk_df["__row_id"].to_numpy()
     chunk_df = chunk_df.drop(columns="__row_id").reset_index(drop=True)
 
-    smiles_col_name = _resolve_smiles_column_name(chunk_df.columns.tolist(), preferred=smiles_column)
+    smiles_col_name = _resolve_smiles_column_name(
+        chunk_df.columns.tolist(), preferred=smiles_column
+    )
     if smiles_col_name is None:
         available_cols = ", ".join(map(str, chunk_df.columns[:20]))
         raise KeyError(f"未找到SMILES列，当前可用列: {available_cols}")

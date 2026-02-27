@@ -1,4 +1,5 @@
 """分子库代表性子集选择系统 - 主页"""
+
 from pathlib import Path
 import sys
 import os
@@ -12,14 +13,17 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # 导入工具模块
-from utils.state_utils import initialize_session_state, display_state_sidebar  # noqa: E402
+from utils.state_utils import (
+    initialize_session_state,
+    display_state_sidebar,
+)  # noqa: E402
 
 # 设置页面标题和配置
 st.set_page_config(
     page_title="分子库代表性子集选择系统",
     page_icon="🧪",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # 初始化会话状态
@@ -51,6 +55,7 @@ def detect_env_status() -> dict:
     if status["torch_installed"]:
         try:
             import torch  # type: ignore
+
             status["cuda_available"] = bool(torch.cuda.is_available())
         except Exception:
             status["cuda_available"] = False
@@ -58,6 +63,7 @@ def detect_env_status() -> dict:
     if status["faiss_installed"]:
         try:
             import faiss  # type: ignore
+
             status["faiss_gpu"] = bool(faiss.get_num_gpus() > 0)
         except Exception:
             status["faiss_gpu"] = False
@@ -97,18 +103,52 @@ def build_workflow_status() -> list[tuple[str, bool, str]]:
     conf_done = _has_data_file_contains("conformer", ".sdf")
     desc3d_done = _has_data_file("descriptors_", ".csv")
     subset_done = _has_data_file("subset_", ".csv")
-    eval_done = bool(st.session_state.get("metric_cache") or st.session_state.get("fps_cache"))
+    eval_done = bool(
+        st.session_state.get("metric_cache") or st.session_state.get("fps_cache")
+    )
     dub_loaded = dub_library_df is not None
 
     return [
-        ("1. 数据处理（预处理）", data_loaded, "已加载数据" if data_loaded else "未检测到数据加载状态"),
-        ("2. 基础成药性筛选", druglike_done, "已完成筛选" if druglike_done else "未检测到筛选结果"),
-        ("3. 生成2D描述符", desc2d_done, "检测到 2D 输出文件" if desc2d_done else "未检测到 2D 输出文件"),
-        ("4. 生成3D构象/构象优化", conf_done, "检测到 3D 构象文件" if conf_done else "未检测到 3D 构象文件"),
-        ("5. 生成3D描述符", desc3d_done, "检测到 3D 描述符文件" if desc3d_done else "未检测到 3D 描述符文件"),
-        ("6. 化合物多样性筛选", subset_done, "检测到子集文件" if subset_done else "未检测到子集文件"),
-        ("7. 结构多样性评估（指纹数据）", eval_done, "本会话已运行评估" if eval_done else "本会话尚未运行评估"),
-        ("8. Deubiquitinase Focused Library", dub_loaded, "已读取 CSV 数据" if dub_loaded else "尚未读取 CSV 数据"),
+        (
+            "1. 数据处理（预处理）",
+            data_loaded,
+            "已加载数据" if data_loaded else "未检测到数据加载状态",
+        ),
+        (
+            "2. 基础成药性筛选",
+            druglike_done,
+            "已完成筛选" if druglike_done else "未检测到筛选结果",
+        ),
+        (
+            "3. 生成2D描述符",
+            desc2d_done,
+            "检测到 2D 输出文件" if desc2d_done else "未检测到 2D 输出文件",
+        ),
+        (
+            "4. 生成3D构象/构象优化",
+            conf_done,
+            "检测到 3D 构象文件" if conf_done else "未检测到 3D 构象文件",
+        ),
+        (
+            "5. 生成3D描述符",
+            desc3d_done,
+            "检测到 3D 描述符文件" if desc3d_done else "未检测到 3D 描述符文件",
+        ),
+        (
+            "6. 化合物多样性筛选",
+            subset_done,
+            "检测到子集文件" if subset_done else "未检测到子集文件",
+        ),
+        (
+            "7. 结构多样性评估（指纹数据）",
+            eval_done,
+            "本会话已运行评估" if eval_done else "本会话尚未运行评估",
+        ),
+        (
+            "8. Deubiquitinase Focused Library",
+            dub_loaded,
+            "已读取 CSV 数据" if dub_loaded else "尚未读取 CSV 数据",
+        ),
     ]
 
 
@@ -128,7 +168,8 @@ with quick_col2:
     if st.button("直接进入结构多样性评估", use_container_width=True):
         st.switch_page("pages/5_结构多样性评估.py")
 
-st.markdown("""
+st.markdown(
+    """
 ### 推荐流程
 1. `数据处理（预处理）`：加载并校验 SMILES 数据。
 2. `基础成药性筛选`：应用 Lipinski / PAINS 等规则。
@@ -136,7 +177,8 @@ st.markdown("""
 4. `化合物多样性筛选`：基于最大最小距离贪心算法生成代表性子集。
 5. `结构多样性评估（指纹数据）`：评估子集覆盖与分布。
 提示：评估页面包含“优化模式/兼容模式”，中大规模数据优先使用优化模式。
-""")
+"""
+)
 
 st.markdown("### 流程完成度")
 workflow_status = build_workflow_status()
@@ -169,16 +211,23 @@ st.markdown("### 运行环境状态")
 env = detect_env_status()
 env_col1, env_col2, env_col3, env_col4 = st.columns(4)
 with env_col1:
-    st.metric("PyTorch/CUDA", "可用" if (env["torch_installed"] and env["cuda_available"]) else "不可用")
+    st.metric(
+        "PyTorch/CUDA",
+        "可用" if (env["torch_installed"] and env["cuda_available"]) else "不可用",
+    )
 with env_col2:
-    st.metric("FAISS", "GPU" if env["faiss_gpu"] else ("CPU" if env["faiss_installed"] else "未安装"))
+    st.metric(
+        "FAISS",
+        "GPU" if env["faiss_gpu"] else ("CPU" if env["faiss_installed"] else "未安装"),
+    )
 with env_col3:
     st.metric("CuPy", "已安装" if env["cupy_installed"] else "未安装")
 with env_col4:
     st.metric("cuML", "已安装" if env["cuml_installed"] else "未安装")
 
 # 添加应用程序信息
-st.markdown("""
+st.markdown(
+    """
 ---
 ### 关于本系统
 
@@ -189,7 +238,8 @@ st.markdown("""
 - 2D/3D 描述符与构象处理
 - 多样性筛选（当前默认：最大最小距离贪心）
 - 结构多样性评估（k-NN 统计、聚类、分布可视化）
-""")
+"""
+)
 
 # 页面底部信息
 st.sidebar.markdown("---")

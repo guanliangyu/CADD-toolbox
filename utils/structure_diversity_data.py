@@ -57,7 +57,9 @@ def _build_file_signature(file_path: str) -> str:
     """构建用于缓存的文件签名"""
     try:
         stat_info = os.stat(file_path)
-        return f"{os.path.abspath(file_path)}|{stat_info.st_mtime_ns}|{stat_info.st_size}"
+        return (
+            f"{os.path.abspath(file_path)}|{stat_info.st_mtime_ns}|{stat_info.st_size}"
+        )
     except OSError:
         return os.path.abspath(file_path)
 
@@ -70,7 +72,9 @@ def _build_fps_cache_key(
     meta_mode: str,
     meta_sample_rows: int,
 ) -> str:
-    cols_sig = "auto" if fingerprint_cols is None else ",".join(map(str, fingerprint_cols))
+    cols_sig = (
+        "auto" if fingerprint_cols is None else ",".join(map(str, fingerprint_cols))
+    )
     file_sig = _build_file_signature(csv_path)
     return "|".join(
         [
@@ -121,7 +125,16 @@ def read_fps(
         sample = pd.read_csv(csv_path, nrows=100, low_memory=True)
 
         if fingerprint_cols is None:
-            keywords = ["fingerprint", "fp", "descriptor", "feature", "bit", "e3fp", "rocs", "usrcat"]
+            keywords = [
+                "fingerprint",
+                "fp",
+                "descriptor",
+                "feature",
+                "bit",
+                "e3fp",
+                "rocs",
+                "usrcat",
+            ]
             num_cols = []
 
             for col in sample.columns:
@@ -165,19 +178,27 @@ def read_fps(
 
                 if i == 1:
                     try:
-                        chunk_array = numeric_chunk.to_numpy(dtype=actual_dtype, copy=False)
+                        chunk_array = numeric_chunk.to_numpy(
+                            dtype=actual_dtype, copy=False
+                        )
                         if np.isinf(chunk_array).any():
                             raise OverflowError("检测到inf，可能是低精度溢出")
                     except (ValueError, OverflowError, TypeError):
                         actual_dtype = "float32"
                         used_fallback_dtype = True
-                        st.warning(f"检测到数据无法稳定转换为 {fp_dtype}，自动切换为 float32")
-                        chunk_array = numeric_chunk.to_numpy(dtype=actual_dtype, copy=False)
+                        st.warning(
+                            f"检测到数据无法稳定转换为 {fp_dtype}，自动切换为 float32"
+                        )
+                        chunk_array = numeric_chunk.to_numpy(
+                            dtype=actual_dtype, copy=False
+                        )
                 else:
                     chunk_array = numeric_chunk.to_numpy(dtype=actual_dtype, copy=False)
 
                 if np.isnan(chunk_array).any() or np.isinf(chunk_array).any():
-                    chunk_array = np.nan_to_num(chunk_array, nan=0.0, posinf=0.0, neginf=0.0)
+                    chunk_array = np.nan_to_num(
+                        chunk_array, nan=0.0, posinf=0.0, neginf=0.0
+                    )
 
                 fp_parts.append(chunk_array)
                 total_rows += len(chunk_array)
@@ -213,7 +234,9 @@ def read_fps(
             meta = pd.read_csv(csv_path, usecols=meta_cols, low_memory=True)
         else:
             sampled_rows = min(meta_sample_rows, fps.shape[0])
-            meta = pd.read_csv(csv_path, usecols=meta_cols, nrows=sampled_rows, low_memory=True)
+            meta = pd.read_csv(
+                csv_path, usecols=meta_cols, nrows=sampled_rows, low_memory=True
+            )
             meta.attrs["sampled"] = True
             meta.attrs["sample_rows"] = sampled_rows
             st.info(f"🧾 元数据按样本加载: {sampled_rows:,}/{fps.shape[0]:,} 行")
@@ -221,7 +244,9 @@ def read_fps(
         progress_bar.empty()
         status_text.empty()
 
-        st.success(f"✅ 流式加载完成: {len(fps):,} 个样本，{len(fingerprint_cols)} 维指纹 ({actual_dtype})")
+        st.success(
+            f"✅ 流式加载完成: {len(fps):,} 个样本，{len(fingerprint_cols)} 维指纹 ({actual_dtype})"
+        )
         st.info(f"📊 内存使用: {fps.nbytes / 1024**2:.1f} MB")
         if used_fallback_dtype:
             st.info(f"💡 数据类型已从 {fp_dtype} 调整为 {actual_dtype} 以确保兼容性")
@@ -305,7 +330,9 @@ def subsample_by_ratio(
     sample_size = max(1, int(len(fps) * ratio))
     sample_size = min(sample_size, len(fps))
     indices = np.sort(rng.choice(len(fps), sample_size, replace=False))
-    st.info(f"{label} 已按 {ratio*100:.1f}% 比例抽样 {sample_size:,}/{len(fps):,} 个样本")
+    st.info(
+        f"{label} 已按 {ratio*100:.1f}% 比例抽样 {sample_size:,}/{len(fps):,} 个样本"
+    )
 
     fps_sub = fps[indices]
     if meta is not None and len(meta) == len(fps):

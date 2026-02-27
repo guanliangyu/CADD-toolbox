@@ -40,7 +40,9 @@ try:
 except Exception:
     UMAP_AVAILABLE = False
 
-TSNE_ITER_PARAM = "max_iter" if "max_iter" in inspect.signature(TSNE).parameters else "n_iter"
+TSNE_ITER_PARAM = (
+    "max_iter" if "max_iter" in inspect.signature(TSNE).parameters else "n_iter"
+)
 
 
 def initialize_cuda():
@@ -108,7 +110,9 @@ def embed_umap(
         st.info(f"🔧 使用 IncrementalPCA({n_pca}D) + UMAP({n_components}D) 降维...")
 
         n_pca_cpu = min(n_pca, fps.shape[1], fps.shape[0] - 1)
-        ipca = IncrementalPCA(n_components=n_pca_cpu, batch_size=min(10_000, fps.shape[0]))
+        ipca = IncrementalPCA(
+            n_components=n_pca_cpu, batch_size=min(10_000, fps.shape[0])
+        )
 
         batch_size = min(10_000, fps.shape[0])
         for i in range(0, len(fps), batch_size):
@@ -320,7 +324,11 @@ def perform_dimensionality_reduction(
                     import cupy as cp
                     from cuml.decomposition import PCA as cuPCA
 
-                    sim_gpu = cp.asarray(np.ascontiguousarray(similarity_matrix.astype(np.float32, copy=False)))
+                    sim_gpu = cp.asarray(
+                        np.ascontiguousarray(
+                            similarity_matrix.astype(np.float32, copy=False)
+                        )
+                    )
                     pca_gpu = cuPCA(n_components=2, random_state=random_seed)
                     coords_gpu = pca_gpu.fit_transform(sim_gpu)
                     coords = cp.asnumpy(coords_gpu)
@@ -377,7 +385,9 @@ def perform_clustering_analysis(
 
     n_samples = len(sim_matrix)
     if n_samples > 50_000:
-        st.warning("⚠️ 大数据集建议使用优化版聚类方法 (perform_optimized_clustering_analysis)")
+        st.warning(
+            "⚠️ 大数据集建议使用优化版聚类方法 (perform_optimized_clustering_analysis)"
+        )
 
     np.random.seed(random_seed)
 
@@ -459,7 +469,9 @@ def perform_clustering_analysis(
                 import cupy as cp
 
                 dist_matrix_gpu = cp.asarray(dist_matrix, dtype=cp.float32)
-                dbscan_gpu = cuDBSCAN(metric="precomputed", eps=eps, min_samples=min_samples)
+                dbscan_gpu = cuDBSCAN(
+                    metric="precomputed", eps=eps, min_samples=min_samples
+                )
                 dbscan_clusters_gpu = dbscan_gpu.fit_predict(dist_matrix_gpu)
                 clusters = cp.asnumpy(dbscan_clusters_gpu)
             except Exception as e:

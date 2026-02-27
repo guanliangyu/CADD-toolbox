@@ -13,6 +13,7 @@ import streamlit as st
 
 try:
     import psutil
+
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
@@ -20,17 +21,20 @@ except ImportError:
 st.set_page_config(page_title="多样性筛选_后台版", layout="wide")
 st.title("🚀 多样性筛选 (后台执行版)")
 
-st.markdown("""
+st.markdown(
+    """
 基于脚本生成和后台执行的多样性筛选功能。
 
 🔧 **功能特点**: 脚本生成、后台执行、进程监控  
 📏 **距离度量**: 欧氏距离、曼哈顿距离、余弦距离  
 ⚡ **执行方式**: 生成独立Python脚本并后台运行  
 🎯 **优势**: 不受页面刷新影响，可长时间运行  
-""")
+"""
+)
 
 # 数据目录设置
 DATA_DIR = "data"
+
 
 def list_data_folders():
     """列出data目录下的所有文件夹"""
@@ -38,26 +42,26 @@ def list_data_folders():
         return []
     return [f for f in os.listdir(DATA_DIR) if os.path.isdir(os.path.join(DATA_DIR, f))]
 
+
 def list_csv_files_in_folder(folder_name):
     """列出指定文件夹中的所有CSV文件"""
     folder_path = os.path.join(DATA_DIR, folder_name)
     if not os.path.exists(folder_path):
         return []
-    return [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+    return [f for f in os.listdir(folder_path) if f.endswith(".csv")]
+
 
 def get_file_info(file_path):
     """获取文件基本信息"""
     if not os.path.exists(file_path):
         return None
-    
+
     file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
     mod_time = os.path.getmtime(file_path)
     mod_time_str = datetime.fromtimestamp(mod_time).strftime("%Y-%m-%d %H:%M:%S")
-    
-    return {
-        'size_mb': file_size,
-        'modified': mod_time_str
-    }
+
+    return {"size_mb": file_size, "modified": mod_time_str}
+
 
 def generate_python_script(config):
     """生成多样性筛选的Python脚本"""
@@ -382,9 +386,10 @@ if __name__ == "__main__":
 '''
     return script_content
 
+
 def generate_shell_script(python_script_path, config):
     """生成执行Python脚本的Shell脚本"""
-    shell_content = f'''#!/bin/bash
+    shell_content = f"""#!/bin/bash
 
 # 多样性筛选执行脚本
 # 生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -439,8 +444,9 @@ else
 fi
 
 exit $EXIT_CODE
-'''
+"""
     return shell_content
+
 
 # 文件选择界面
 st.subheader("1. 选择输入文件")
@@ -454,16 +460,16 @@ selected_folder = st.selectbox("选择数据文件夹:", folders)
 
 if selected_folder:
     csv_files = list_csv_files_in_folder(selected_folder)
-    
+
     if not csv_files:
         st.warning(f"文件夹 {selected_folder} 中没有CSV文件")
         st.stop()
-    
+
     selected_file = st.selectbox("选择描述符CSV文件:", csv_files)
-    
+
     if selected_file:
         file_path = os.path.join(DATA_DIR, selected_folder, selected_file)
-        
+
         # 显示文件信息
         file_info = get_file_info(file_path)
         if file_info:
@@ -471,31 +477,31 @@ if selected_folder:
             with col1:
                 st.metric("文件大小", f"{file_info['size_mb']:.1f} MB")
             with col2:
-                st.metric("修改时间", file_info['modified'])
+                st.metric("修改时间", file_info["modified"])
             with col3:
                 # 使用session state缓存分子数统计
                 cache_key = f"molecule_count_{file_path}_{file_info['modified']}"
-                
+
                 if cache_key not in st.session_state:
                     with st.spinner("统计分子数..."):
                         try:
-                            with open(file_path, 'r') as f:
+                            with open(file_path, "r") as f:
                                 row_count = sum(1 for line in f) - 1  # 减去表头
                             st.session_state[cache_key] = row_count
                         except Exception:
                             st.session_state[cache_key] = "读取失败"
-                
+
                 row_count = st.session_state[cache_key]
                 st.metric("分子数量", row_count)
 
         # 筛选设置
         st.subheader("2. 筛选设置")
-        
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
             st.markdown("**🚀 算法设置**")
-            
+
             # 距离算法选择
             distance_method = st.selectbox(
                 "距离算法:",
@@ -503,11 +509,11 @@ if selected_folder:
                 index=2,  # 默认选择余弦距离
                 format_func=lambda x: {
                     "euclidean": "欧氏距离 (L2)",
-                    "manhattan": "曼哈顿距离 (L1)", 
-                    "cosine": "余弦距离 (推荐)"
-                }[x]
+                    "manhattan": "曼哈顿距离 (L1)",
+                    "cosine": "余弦距离 (推荐)",
+                }[x],
             )
-            
+
             # 初始点选择方法
             initial_method = st.selectbox(
                 "初始点选择:",
@@ -515,221 +521,229 @@ if selected_folder:
                 format_func=lambda x: {
                     "random": "随机选择",
                     "centroid": "距质心最远",
-                    "first": "第一个分子"
-                }[x]
+                    "first": "第一个分子",
+                }[x],
             )
-            
+
             # GPU设置
             use_gpu = st.checkbox("使用GPU加速", value=True)
-            use_half_precision = st.checkbox("启用混合精度 (FP16)", value=True, disabled=not use_gpu)
-        
+            use_half_precision = st.checkbox(
+                "启用混合精度 (FP16)", value=True, disabled=not use_gpu
+            )
+
         with col2:
             st.markdown("**筛选参数**")
-            
+
             # 子集大小设置
-            subset_method = st.radio(
-                "子集大小设置:",
-                ["按数量", "按比例"]
-            )
-            
+            subset_method = st.radio("子集大小设置:", ["按数量", "按比例"])
+
             if subset_method == "按数量":
                 subset_size = st.number_input(
-                    "筛选数量:",
-                    min_value=1,
-                    max_value=100000,
-                    value=1000
+                    "筛选数量:", min_value=1, max_value=100000, value=1000
                 )
             else:
-                subset_ratio = st.slider(
-                    "筛选比例 (%):",
-                    0.1, 50.0, 10.0, 0.5
-                )
+                subset_ratio = st.slider("筛选比例 (%):", 0.1, 50.0, 10.0, 0.5)
                 # 根据文件估算数量
                 if isinstance(row_count, int):
                     subset_size = max(1, int(row_count * subset_ratio / 100))
                     st.info(f"预计筛选数量: {subset_size}")
                 else:
                     subset_size = 1000
-            
+
             # 随机种子
             random_seed = st.number_input(
-                "随机种子:",
-                min_value=0,
-                max_value=9999,
-                value=42
+                "随机种子:", min_value=0, max_value=9999, value=42
             )
-            
+
             # 输出文件名
             output_filename = st.text_input(
                 "输出文件名:",
-                value=f"subset_{subset_size}_{distance_method}_{selected_file}"
+                value=f"subset_{subset_size}_{distance_method}_{selected_file}",
             )
 
         # 脚本生成按钮
         st.subheader("3. 脚本生成")
-        
+
         if st.button("📄 生成执行脚本", type="primary"):
             try:
                 # 准备配置
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 job_name = f"subset_{timestamp}"
-                
+
                 config = {
-                    'input_file': file_path,
-                    'output_file': os.path.join(DATA_DIR, selected_folder, output_filename),
-                    'subset_size': subset_size,
-                    'distance_method': distance_method,
-                    'initial_method': initial_method,
-                    'use_gpu': use_gpu,
-                    'use_half_precision': use_half_precision,
-                    'random_seed': random_seed,
-                    'job_name': job_name
+                    "input_file": file_path,
+                    "output_file": os.path.join(
+                        DATA_DIR, selected_folder, output_filename
+                    ),
+                    "subset_size": subset_size,
+                    "distance_method": distance_method,
+                    "initial_method": initial_method,
+                    "use_gpu": use_gpu,
+                    "use_half_precision": use_half_precision,
+                    "random_seed": random_seed,
+                    "job_name": job_name,
                 }
-                
+
                 # 生成脚本文件路径
                 script_dir = os.path.join(DATA_DIR, selected_folder)
                 python_script_name = f"subset_selecting_{timestamp}.py"
                 shell_script_name = f"subset_selecting_{timestamp}.sh"
-                
+
                 python_script_path = os.path.join(script_dir, python_script_name)
                 shell_script_path = os.path.join(script_dir, shell_script_name)
-                
+
                 # 创建logs目录
                 logs_dir = os.path.join(script_dir, "logs")
                 os.makedirs(logs_dir, exist_ok=True)
-                
+
                 # 生成Python脚本
                 python_content = generate_python_script(config)
-                with open(python_script_path, 'w', encoding='utf-8') as f:
+                with open(python_script_path, "w", encoding="utf-8") as f:
                     f.write(python_content)
                 os.chmod(python_script_path, 0o755)
-                
+
                 # 生成Shell脚本
                 shell_content = generate_shell_script(python_script_path, config)
-                with open(shell_script_path, 'w', encoding='utf-8') as f:
+                with open(shell_script_path, "w", encoding="utf-8") as f:
                     f.write(shell_content)
                 os.chmod(shell_script_path, 0o755)
-                
+
                 st.success("🎉 脚本生成成功！")
-                
-                st.code(f"""
+
+                st.code(
+                    f"""
 生成的文件:
 📄 Python脚本: {python_script_name}
 🔧 Shell脚本: {shell_script_name}
 📁 日志目录: logs/
-                """)
-                
+                """
+                )
+
                 # 保存到session state
                 st.session_state.current_script = {
-                    'python_path': python_script_path,
-                    'shell_path': shell_script_path,
-                    'config': config,
-                    'job_name': job_name,
-                    'logs_dir': logs_dir,
-                    'stdout_log': os.path.join(logs_dir, f"{job_name}_stdout.log"),
-                    'stderr_log': os.path.join(logs_dir, f"{job_name}_stderr.log")
+                    "python_path": python_script_path,
+                    "shell_path": shell_script_path,
+                    "config": config,
+                    "job_name": job_name,
+                    "logs_dir": logs_dir,
+                    "stdout_log": os.path.join(logs_dir, f"{job_name}_stdout.log"),
+                    "stderr_log": os.path.join(logs_dir, f"{job_name}_stderr.log"),
                 }
-                
+
                 # 提供下载
                 col1, col2 = st.columns(2)
                 with col1:
-                    with open(python_script_path, 'rb') as f:
+                    with open(python_script_path, "rb") as f:
                         st.download_button(
                             "📥 下载Python脚本",
                             f.read(),
                             file_name=python_script_name,
-                            mime="text/plain"
+                            mime="text/plain",
                         )
                 with col2:
-                    with open(shell_script_path, 'rb') as f:
+                    with open(shell_script_path, "rb") as f:
                         st.download_button(
                             "📥 下载Shell脚本",
                             f.read(),
                             file_name=shell_script_name,
-                            mime="text/plain"
+                            mime="text/plain",
                         )
-                
+
             except Exception as e:
                 st.error(f"脚本生成失败: {str(e)}")
 
         # 执行控制
         st.subheader("4. 执行控制")
-        
-        if 'current_script' in st.session_state:
+
+        if "current_script" in st.session_state:
             script_info = st.session_state.current_script
             st.info(f"当前脚本: {script_info['job_name']}")
-            
+
             col1, col2, col3 = st.columns(3)
-            
+
             with col1:
                 if st.button("🚀 执行脚本", type="primary"):
                     try:
                         # 启动后台进程
                         process = subprocess.Popen(
-                            ['/bin/bash', script_info['shell_path']],
-                            cwd=os.path.dirname(script_info['shell_path']),
-                            preexec_fn=os.setsid  # 创建新的进程组
+                            ["/bin/bash", script_info["shell_path"]],
+                            cwd=os.path.dirname(script_info["shell_path"]),
+                            preexec_fn=os.setsid,  # 创建新的进程组
                         )
-                        
+
                         # 保存进程信息
-                        if 'running_processes' not in st.session_state:
+                        if "running_processes" not in st.session_state:
                             st.session_state.running_processes = []
-                        
+
                         process_info = {
-                            'pid': process.pid,
-                            'job_name': script_info['job_name'],
-                            'start_time': time.time(),
-                            'stdout_log': script_info['stdout_log'],
-                            'stderr_log': script_info['stderr_log'],
-                            'output_file': script_info['config']['output_file']
+                            "pid": process.pid,
+                            "job_name": script_info["job_name"],
+                            "start_time": time.time(),
+                            "stdout_log": script_info["stdout_log"],
+                            "stderr_log": script_info["stderr_log"],
+                            "output_file": script_info["config"]["output_file"],
                         }
-                        
+
                         st.session_state.running_processes.append(process_info)
                         st.success(f"✅ 后台进程已启动 (PID: {process.pid})")
-                        
+
                     except Exception as e:
                         st.error(f"启动失败: {str(e)}")
-            
+
             with col2:
                 if st.button("📋 查看stdout日志"):
-                    if os.path.exists(script_info['stdout_log']):
+                    if os.path.exists(script_info["stdout_log"]):
                         try:
-                            with open(script_info['stdout_log'], 'r', encoding='utf-8') as f:
+                            with open(
+                                script_info["stdout_log"], "r", encoding="utf-8"
+                            ) as f:
                                 lines = f.readlines()
-                                last_50_lines = lines[-50:] if len(lines) > 50 else lines
-                                st.code(''.join(last_50_lines))
+                                last_50_lines = (
+                                    lines[-50:] if len(lines) > 50 else lines
+                                )
+                                st.code("".join(last_50_lines))
                         except Exception as e:
                             st.error(f"读取日志失败: {str(e)}")
                     else:
                         st.warning("日志文件不存在")
-            
+
             with col3:
                 if st.button("📋 查看stderr日志"):
-                    if os.path.exists(script_info['stderr_log']):
+                    if os.path.exists(script_info["stderr_log"]):
                         try:
-                            with open(script_info['stderr_log'], 'r', encoding='utf-8') as f:
+                            with open(
+                                script_info["stderr_log"], "r", encoding="utf-8"
+                            ) as f:
                                 lines = f.readlines()
-                                last_50_lines = lines[-50:] if len(lines) > 50 else lines
-                                st.code(''.join(last_50_lines))
+                                last_50_lines = (
+                                    lines[-50:] if len(lines) > 50 else lines
+                                )
+                                st.code("".join(last_50_lines))
                         except Exception as e:
                             st.error(f"读取日志失败: {str(e)}")
                     else:
                         st.warning("日志文件不存在")
-        
+
         else:
             st.info("请先生成脚本")
 
         # 运行状态监控
         st.subheader("5. 运行状态监控")
-        
-        if 'running_processes' in st.session_state and st.session_state.running_processes:
+
+        if (
+            "running_processes" in st.session_state
+            and st.session_state.running_processes
+        ):
             for i, proc_info in enumerate(st.session_state.running_processes):
-                with st.expander(f"任务: {proc_info['job_name']} (PID: {proc_info['pid']})", expanded=True):
-                    
+                with st.expander(
+                    f"任务: {proc_info['job_name']} (PID: {proc_info['pid']})",
+                    expanded=True,
+                ):
+
                     # 检查进程状态
                     if PSUTIL_AVAILABLE:
                         try:
-                            process = psutil.Process(proc_info['pid'])
+                            process = psutil.Process(proc_info["pid"])
                             is_running = process.is_running()
                             status = "🟢 运行中" if is_running else "⚪ 已结束"
                         except psutil.NoSuchProcess:
@@ -738,34 +752,38 @@ if selected_folder:
                     else:
                         # 简单检查
                         try:
-                            os.kill(proc_info['pid'], 0)
+                            os.kill(proc_info["pid"], 0)
                             is_running = True
                             status = "🟢 运行中"
                         except OSError:
                             is_running = False
                             status = "⚪ 已结束"
-                    
+
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.write(f"**状态**: {status}")
                     with col2:
-                        elapsed = (time.time() - proc_info['start_time']) / 60
+                        elapsed = (time.time() - proc_info["start_time"]) / 60
                         st.write(f"**运行时间**: {elapsed:.1f} 分钟")
                     with col3:
                         # 检查输出文件
-                        if os.path.exists(proc_info['output_file']):
-                            file_size = os.path.getsize(proc_info['output_file']) / (1024 * 1024)
+                        if os.path.exists(proc_info["output_file"]):
+                            file_size = os.path.getsize(proc_info["output_file"]) / (
+                                1024 * 1024
+                            )
                             st.write(f"**输出**: {file_size:.1f} MB")
-                            
+
                             # 提供下载
-                            with open(proc_info['output_file'], 'rb') as f:
+                            with open(proc_info["output_file"], "rb") as f:
                                 st.download_button(
                                     "📥 下载结果",
                                     f.read(),
-                                    file_name=os.path.basename(proc_info['output_file']),
-                                    key=f"download_{i}"
+                                    file_name=os.path.basename(
+                                        proc_info["output_file"]
+                                    ),
+                                    key=f"download_{i}",
                                 )
                         else:
                             st.write("**输出**: 未生成")
         else:
-            st.info("当前没有运行中的任务") 
+            st.info("当前没有运行中的任务")

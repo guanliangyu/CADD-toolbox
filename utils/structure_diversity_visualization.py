@@ -47,7 +47,15 @@ DEFAULT_RANDOM_SEED = 42
 
 PHYS_CHEM_PROPERTIES = ["MW", "AlogP", "HBD", "HBA", "TPSA", "RB"]
 PHYSCHEM_PROPERTY_ALIASES = {
-    "MW": ["mw", "molwt", "molecularweight", "molecular_weight", "molweight", "amw", "exactmass"],
+    "MW": [
+        "mw",
+        "molwt",
+        "molecularweight",
+        "molecular_weight",
+        "molweight",
+        "amw",
+        "exactmass",
+    ],
     "AlogP": ["alogp", "logp", "clogp", "xlogp", "crippenlogp"],
     "HBD": ["hbd", "hbonddonor", "numhdonors", "hdonors", "hbond_donor"],
     "HBA": ["hba", "hbondacceptor", "numhacceptors", "hacceptors", "hbond_acceptor"],
@@ -65,7 +73,9 @@ SMILES_COLUMN_ALIASES = [
 ]
 
 
-def render_diversity_metrics_list(dataset_metrics: list[tuple[str, dict[str, float]]]) -> None:
+def render_diversity_metrics_list(
+    dataset_metrics: list[tuple[str, dict[str, float]]]
+) -> None:
     """以列表形式展示多数据集多样性指标（每行一个数据集）"""
     st.markdown("**多样性指标列表**")
 
@@ -75,14 +85,18 @@ def render_diversity_metrics_list(dataset_metrics: list[tuple[str, dict[str, flo
             continue
 
         ordered_keys = [key for key in DIVERSITY_METRIC_DISPLAY_ORDER if key in metrics]
-        remaining_keys = [key for key in metrics.keys() if key not in DIVERSITY_METRIC_DISPLAY_ORDER]
+        remaining_keys = [
+            key for key in metrics.keys() if key not in DIVERSITY_METRIC_DISPLAY_ORDER
+        ]
         all_keys = ordered_keys + remaining_keys
 
         metric_text = " | ".join([f"{key}={metrics[key]:.4f}" for key in all_keys])
         st.markdown(f"- **{dataset_name}**：{metric_text}")
 
 
-def plot_nearest_neighbor_distribution(sim_matrix=None, knn_sim=None, title="Nearest Neighbor Distribution"):
+def plot_nearest_neighbor_distribution(
+    sim_matrix=None, knn_sim=None, title="Nearest Neighbor Distribution"
+):
     """绘制最近邻分布（支持完整矩阵或k-NN数据）"""
     if sim_matrix is not None:
         np.fill_diagonal(sim_matrix, 0)
@@ -224,7 +238,11 @@ def _prepare_meta_for_physchem_plot(
         return meta_df
     if len(meta_df) <= max_rows:
         return meta_df.reset_index(drop=True).copy()
-    sampled = meta_df.sample(n=max_rows, random_state=random_seed).reset_index(drop=True).copy()
+    sampled = (
+        meta_df.sample(n=max_rows, random_state=random_seed)
+        .reset_index(drop=True)
+        .copy()
+    )
     return sampled
 
 
@@ -276,12 +294,18 @@ def _ensure_physchem_columns(
     missing_props = []
 
     for prop in PHYS_CHEM_PROPERTIES:
-        aliases = [prop, f"calc_{prop}", f"{prop}_calc"] + PHYSCHEM_PROPERTY_ALIASES.get(prop, [])
+        aliases = [
+            prop,
+            f"calc_{prop}",
+            f"{prop}_calc",
+        ] + PHYSCHEM_PROPERTY_ALIASES.get(prop, [])
         col = _find_property_column(working_df, aliases, prefer_numeric=True)
         if col is None:
             missing_props.append(prop)
             continue
-        valid_numeric = int(pd.to_numeric(working_df[col], errors="coerce").notna().sum())
+        valid_numeric = int(
+            pd.to_numeric(working_df[col], errors="coerce").notna().sum()
+        )
         if valid_numeric == 0:
             missing_props.append(prop)
 
@@ -300,7 +324,9 @@ def _ensure_physchem_columns(
         return working_df, info
 
     info["smiles_col"] = smiles_col
-    st.info(f"🧮 {dataset_label} 缺失性质 {', '.join(missing_props)}，正在基于 `{smiles_col}` 自动计算...")
+    st.info(
+        f"🧮 {dataset_label} 缺失性质 {', '.join(missing_props)}，正在基于 `{smiles_col}` 自动计算..."
+    )
 
     calc_values = {prop: [] for prop in missing_props}
     for smiles in working_df[smiles_col]:
@@ -311,7 +337,9 @@ def _ensure_physchem_columns(
     for prop in missing_props:
         calc_col = f"calc_{prop}"
         working_df[calc_col] = calc_values[prop]
-        valid_count = int(pd.to_numeric(working_df[calc_col], errors="coerce").notna().sum())
+        valid_count = int(
+            pd.to_numeric(working_df[calc_col], errors="coerce").notna().sum()
+        )
         if valid_count > 0:
             info["computed"].append(prop)
         else:
@@ -338,13 +366,24 @@ def plot_physchem_distribution_comparison(
 
     for i, prop in enumerate(PHYS_CHEM_PROPERTIES):
         ax = axes[i]
-        aliases = [prop, f"calc_{prop}", f"{prop}_calc"] + PHYSCHEM_PROPERTY_ALIASES.get(prop, [])
+        aliases = [
+            prop,
+            f"calc_{prop}",
+            f"{prop}_calc",
+        ] + PHYSCHEM_PROPERTY_ALIASES.get(prop, [])
         col_A = _find_property_column(meta_A, aliases, prefer_numeric=True)
         col_B = _find_property_column(meta_B, aliases, prefer_numeric=True)
 
         if not col_A or not col_B:
             missing.append(prop)
-            ax.text(0.5, 0.5, f"{prop}\\n缺少可匹配列", ha="center", va="center", transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                f"{prop}\\n缺少可匹配列",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             ax.set_title(f"{prop} Distribution")
             ax.set_xticks([])
             ax.set_yticks([])
@@ -354,7 +393,14 @@ def plot_physchem_distribution_comparison(
         values_B = _prepare_numeric_series(meta_B, col_B, random_seed=random_seed)
         if values_A.empty or values_B.empty:
             missing.append(prop)
-            ax.text(0.5, 0.5, f"{prop}\\n有效数值不足", ha="center", va="center", transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                f"{prop}\\n有效数值不足",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             ax.set_title(f"{prop} Distribution")
             ax.set_xticks([])
             ax.set_yticks([])
@@ -422,12 +468,23 @@ def plot_physchem_distribution_single(
 
     for i, prop in enumerate(PHYS_CHEM_PROPERTIES):
         ax = axes[i]
-        aliases = [prop, f"calc_{prop}", f"{prop}_calc"] + PHYSCHEM_PROPERTY_ALIASES.get(prop, [])
+        aliases = [
+            prop,
+            f"calc_{prop}",
+            f"{prop}_calc",
+        ] + PHYSCHEM_PROPERTY_ALIASES.get(prop, [])
         col = _find_property_column(meta_df, aliases, prefer_numeric=True)
 
         if not col:
             missing.append(prop)
-            ax.text(0.5, 0.5, f"{prop}\n缺少可匹配列", ha="center", va="center", transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                f"{prop}\n缺少可匹配列",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             ax.set_title(f"{prop} Distribution")
             ax.set_xticks([])
             ax.set_yticks([])
@@ -436,7 +493,14 @@ def plot_physchem_distribution_single(
         values = _prepare_numeric_series(meta_df, col, random_seed=random_seed)
         if values.empty:
             missing.append(prop)
-            ax.text(0.5, 0.5, f"{prop}\n有效数值不足", ha="center", va="center", transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                f"{prop}\n有效数值不足",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             ax.set_title(f"{prop} Distribution")
             ax.set_xticks([])
             ax.set_yticks([])
@@ -487,7 +551,9 @@ def render_physchem_distribution_single(
         )
         return
 
-    meta_plot = _prepare_meta_for_physchem_plot(meta_df, max_rows=MAX_PHYSCHEM_PLOT_ROWS, random_seed=random_seed)
+    meta_plot = _prepare_meta_for_physchem_plot(
+        meta_df, max_rows=MAX_PHYSCHEM_PLOT_ROWS, random_seed=random_seed
+    )
     meta_ready, calc_info = _ensure_physchem_columns(meta_plot, "数据集A")
 
     if calc_info.get("computed"):
@@ -496,13 +562,21 @@ def render_physchem_distribution_single(
     if calc_info.get("unresolved"):
         reason = calc_info.get("reason")
         if reason == "smiles_missing":
-            st.caption(f"数据集A仍无法补算: {', '.join(calc_info['unresolved'])}（未找到SMILES列）")
+            st.caption(
+                f"数据集A仍无法补算: {', '.join(calc_info['unresolved'])}（未找到SMILES列）"
+            )
         elif reason == "rdkit_unavailable":
-            st.caption(f"数据集A仍无法补算: {', '.join(calc_info['unresolved'])}（RDKit不可用）")
+            st.caption(
+                f"数据集A仍无法补算: {', '.join(calc_info['unresolved'])}（RDKit不可用）"
+            )
         else:
-            st.caption(f"数据集A仍无法补算: {', '.join(calc_info['unresolved'])}（SMILES无效或无法解析）")
+            st.caption(
+                f"数据集A仍无法补算: {', '.join(calc_info['unresolved'])}（SMILES无效或无法解析）"
+            )
 
-    fig, summary = plot_physchem_distribution_single(meta_ready, random_seed=random_seed)
+    fig, summary = plot_physchem_distribution_single(
+        meta_ready, random_seed=random_seed
+    )
     if fig is None:
         st.info("未找到可用的理化性质列，无法绘图。")
         return
@@ -534,8 +608,12 @@ def render_physchem_distribution_comparison(
         )
         return
 
-    meta_A_plot = _prepare_meta_for_physchem_plot(meta_A, max_rows=MAX_PHYSCHEM_PLOT_ROWS, random_seed=random_seed)
-    meta_B_plot = _prepare_meta_for_physchem_plot(meta_B, max_rows=MAX_PHYSCHEM_PLOT_ROWS, random_seed=random_seed)
+    meta_A_plot = _prepare_meta_for_physchem_plot(
+        meta_A, max_rows=MAX_PHYSCHEM_PLOT_ROWS, random_seed=random_seed
+    )
+    meta_B_plot = _prepare_meta_for_physchem_plot(
+        meta_B, max_rows=MAX_PHYSCHEM_PLOT_ROWS, random_seed=random_seed
+    )
 
     meta_A_ready, calc_info_A = _ensure_physchem_columns(meta_A_plot, "数据集A")
     meta_B_ready, calc_info_B = _ensure_physchem_columns(meta_B_plot, "数据集B")
@@ -548,21 +626,35 @@ def render_physchem_distribution_comparison(
     if calc_info_A.get("unresolved"):
         reason_a = calc_info_A.get("reason")
         if reason_a == "smiles_missing":
-            st.caption(f"数据集A仍无法补算: {', '.join(calc_info_A['unresolved'])}（未找到SMILES列）")
+            st.caption(
+                f"数据集A仍无法补算: {', '.join(calc_info_A['unresolved'])}（未找到SMILES列）"
+            )
         elif reason_a == "rdkit_unavailable":
-            st.caption(f"数据集A仍无法补算: {', '.join(calc_info_A['unresolved'])}（RDKit不可用）")
+            st.caption(
+                f"数据集A仍无法补算: {', '.join(calc_info_A['unresolved'])}（RDKit不可用）"
+            )
         else:
-            st.caption(f"数据集A仍无法补算: {', '.join(calc_info_A['unresolved'])}（SMILES无效或无法解析）")
+            st.caption(
+                f"数据集A仍无法补算: {', '.join(calc_info_A['unresolved'])}（SMILES无效或无法解析）"
+            )
     if calc_info_B.get("unresolved"):
         reason_b = calc_info_B.get("reason")
         if reason_b == "smiles_missing":
-            st.caption(f"数据集B仍无法补算: {', '.join(calc_info_B['unresolved'])}（未找到SMILES列）")
+            st.caption(
+                f"数据集B仍无法补算: {', '.join(calc_info_B['unresolved'])}（未找到SMILES列）"
+            )
         elif reason_b == "rdkit_unavailable":
-            st.caption(f"数据集B仍无法补算: {', '.join(calc_info_B['unresolved'])}（RDKit不可用）")
+            st.caption(
+                f"数据集B仍无法补算: {', '.join(calc_info_B['unresolved'])}（RDKit不可用）"
+            )
         else:
-            st.caption(f"数据集B仍无法补算: {', '.join(calc_info_B['unresolved'])}（SMILES无效或无法解析）")
+            st.caption(
+                f"数据集B仍无法补算: {', '.join(calc_info_B['unresolved'])}（SMILES无效或无法解析）"
+            )
 
-    fig, summary = plot_physchem_distribution_comparison(meta_A_ready, meta_B_ready, random_seed=random_seed)
+    fig, summary = plot_physchem_distribution_comparison(
+        meta_A_ready, meta_B_ready, random_seed=random_seed
+    )
     if fig is None:
         st.info("未找到可用的理化性质列，无法绘图。")
         return
@@ -574,13 +666,20 @@ def render_physchem_distribution_comparison(
     missing = summary.get("missing", [])
 
     if matched:
-        matched_text = "；".join([f"{prop}: A[{col_a}] vs B[{col_b}]" for prop, (col_a, col_b) in matched.items()])
+        matched_text = "；".join(
+            [
+                f"{prop}: A[{col_a}] vs B[{col_b}]"
+                for prop, (col_a, col_b) in matched.items()
+            ]
+        )
         st.caption(f"自动匹配列: {matched_text}")
     if missing:
         st.caption(f"以下性质未成功绘制（列缺失或数值不足）: {', '.join(missing)}")
 
 
-def plot_clustering_results(clustering_results, title="Clustering Results", method="PCA-UMAP"):
+def plot_clustering_results(
+    clustering_results, title="Clustering Results", method="PCA-UMAP"
+):
     """绘制聚类结果"""
     coords = clustering_results["coords"]
     clusters = clustering_results["clusters"]
@@ -696,9 +795,13 @@ def plot_distribution_comparison(coords_A, coords_B, metrics=None):
 
             legend_handles = []
             if plotted_A:
-                legend_handles.append(Line2D([0], [0], color="blue", lw=2, label="Dataset A"))
+                legend_handles.append(
+                    Line2D([0], [0], color="blue", lw=2, label="Dataset A")
+                )
             if plotted_B:
-                legend_handles.append(Line2D([0], [0], color="orange", lw=2, label="Dataset B"))
+                legend_handles.append(
+                    Line2D([0], [0], color="orange", lw=2, label="Dataset B")
+                )
             ax2.legend(handles=legend_handles)
         else:
             ax2.text(
