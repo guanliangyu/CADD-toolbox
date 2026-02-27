@@ -41,7 +41,7 @@ jobs:
       - name: Set up micromamba
         uses: mamba-org/setup-micromamba@v2
         with:
-          micromamba-version: "1.5.7"
+          micromamba-version: "latest"
           cache-environment: true
           environment-file: environment.ci.yml
           environment-name: cadd-toolbox
