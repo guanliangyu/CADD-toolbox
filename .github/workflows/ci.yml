@@ -23,7 +23,7 @@ jobs:
       - name: Install lint dependencies
         run: |
           pip install --upgrade pip
-          pip install ruff black
+          pip install "ruff==0.15.4" "black==24.2.0"
 
       - name: Ruff (style/lint)
         run: ruff check .

@@ -25,6 +25,9 @@
 
 ## Lint & Format Requirements
 - `ruff` and `black` are required gates for local changes and CI.
+- Pin formatter/linter versions to avoid style drift between local and CI:
+  - `ruff==0.15.4`
+  - `black==24.2.0`
 - Before commit, run:
   - `ruff check .`
   - `black --check --diff .`
