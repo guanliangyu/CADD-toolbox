@@ -7,7 +7,7 @@
 ### 分子处理与优化
 - **数据预处理**：SMILES规范化、分子过滤、重复去除
 - **3D构象生成**：支持ETKDG、MMFF力场优化
-- **构象动力学优化**：OpenMM分子动力学模拟
+- **构象动力学优化**：以RDKit MMFF94为主，OpenMM作为可选高级选项
 - **成药性筛选**：基于Lipinski规则的基础筛选
 
 ### 特征计算与描述符
@@ -33,6 +33,7 @@
 - **后台任务管理**：支持长时间运行的计算任务
 - **进度监控**：实时查看处理进度和系统资源使用
 - **断点恢复**：支持中断后自动恢复计算
+- **专题页面**：内置常用计算小工具与Deubiquitinase Focused Library浏览
 
 ## 🚀 安装指南
 
@@ -79,6 +80,36 @@ conda activate CADD-Toolbox
 # 启动应用
 streamlit run Home.py
 ```
+
+### 基于 `environment.yml` 安装（标准方式）
+
+如果你希望直接使用仓库内维护的环境定义文件，可按下面方式安装：
+
+```bash
+# 克隆项目
+git clone https://github.com/guanliangyu/CADD-toolbox.git
+cd CADD-toolbox
+
+# 推荐：使用 mamba（更快）
+mamba env create -f environment.yml
+
+# 或使用 conda
+# conda env create -f environment.yml
+
+# 激活环境
+conda activate CADD-Toolbox
+
+# 验证关键依赖
+python test_environment.py
+python test/check_gpu_support.py
+
+# 启动应用
+streamlit run Home.py
+```
+
+说明：
+- `environment.yml` 为主环境（包含 GPU 相关依赖栈）。
+- 若仅用于 CI/CPU 场景，可使用 `environment.ci.yml`。
 
 ### 安装过程说明
 
@@ -288,7 +319,7 @@ streamlit run Home.py
 - **注意**：耗时较长，大数据集建议使用后台模式
 
 ##### 4-2. 构象动力学优化
-- **功能**：使用 OpenMM 进行分子动力学模拟优化
+- **功能**：使用 RDKit MMFF94 力场进行构象优化（OpenMM 为可选高级选项）
 - **智能后台执行**：
   - 支持长时间运行
   - 断点恢复功能
@@ -338,6 +369,20 @@ streamlit run Home.py
   - `utils/structure_diversity_analysis.py` 负责降维与聚类计算
   - `utils/structure_diversity_visualization.py` 负责图表与分布对比渲染
 
+##### 7. 常用小工具
+- **功能**：提供药物研发常见公式速查与交互式计算
+- **覆盖内容**：
+  - 清除率、半衰期、分布容积、生物利用度等常见 PK 公式
+  - 单位换算与配液体积估算
+- **页面**：`pages/6_常用小工具.py`
+
+##### 8. Deubiquitinase Focused Library
+- **功能**：加载并浏览去泛素化酶聚焦化合物库（CSV）
+- **覆盖内容**：
+  - 自动尝试编码与分隔符并输出读取元信息
+  - 表格浏览、筛选与基础可视化
+- **页面**：`pages/7_Deubiquitinase_Focused_Library.py`
+
 #### 使用流程建议
 
 ##### 基础流程（推荐新手）
@@ -352,7 +397,7 @@ streamlit run Home.py
 2. **成药性筛选** → 基础过滤
 3. **生成2D描述符** → 计算2D特征
 4. **生成3D构象** → 生成3D结构
-5. **构象动力学优化** → MD 模拟优化
+5. **构象动力学优化** → 力场优化（RDKit MMFF94，OpenMM可选）
 6. **生成3D描述符** → 计算3D特征
 7. **多样性筛选（2D+3D）** → 综合特征选择
 8. **结构多样性评估（指纹数据）** → 全面验证
@@ -382,7 +427,7 @@ python scripts/run_pipeline.py \
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--input` | 输入文件路径 | 必需 |
-| `--output` | 输出目录 | 必需 |
+| `--output` | 输出目录 | `output` |
 | `--config` | 配置文件路径 | `configs/default_config.yml` |
 | `--smiles_col` | SMILES 列名 | `"SMILES"` |
 | `--use_gpu` | 启用 GPU 加速 | False |
@@ -591,7 +636,9 @@ CADD-toolbox/
 │   ├── 3-2_构象动力学优化.py
 │   ├── 3-3_生成3D描述符.py
 │   ├── 4_化合物多样性筛选.py
-│   └── 5_结构多样性评估.py
+│   ├── 5_结构多样性评估.py
+│   ├── 6_常用小工具.py
+│   └── 7_Deubiquitinase_Focused_Library.py
 ├── utils/                     # 核心工具模块
 │   ├── molecular_utils.py     # 分子处理
 │   ├── clustering_utils.py    # 聚类算法
@@ -647,7 +694,7 @@ python -c "import cudf; print('GPU available')"
 - **Butina聚类**：基于Tanimoto相似度的快速聚类
 - **K-means**：基于特征向量的无监督聚类
 - **MaxMin算法**：最大最小距离多样性选择
-- **层次聚类**：支持不同linkage方法
+- **密度聚类**：支持 DBSCAN / HDBSCAN（按环境可用性自动选择）
 
 ### 特征工程
 - **多尺度指纹**：从分子片段到整体结构特征
