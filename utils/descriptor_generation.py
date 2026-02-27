@@ -250,11 +250,46 @@ def merge_feature_frames(
     return combined
 
 
+def _resolve_smiles_column_name(columns: Sequence[str], preferred: str | None = None) -> str | None:
+    """根据优先列名与常见别名解析SMILES列名"""
+    column_list = [str(col) for col in columns]
+    if preferred and preferred in column_list:
+        return preferred
+
+    if "SMILES" in column_list:
+        return "SMILES"
+
+    normalized_map: Dict[str, str] = {col.strip().lower(): col for col in column_list}
+    preferred_aliases = (
+        "smiles",
+        "canonical_smiles",
+        "canon_smiles",
+        "isomeric_smiles",
+        "input_smiles",
+        "structure_smiles",
+        "molecule_smiles",
+    )
+    for alias in preferred_aliases:
+        if alias in normalized_map:
+            return normalized_map[alias]
+
+    for col in column_list:
+        if "smiles" in col.lower():
+            return col
+
+    return None
+
+
 def process_chunk_worker(
-    args: Tuple[List[Dict[str, Any]], Sequence[str], Sequence[str], Dict[str, Dict[str, Any]]]
+    args: Tuple[Any, ...]
 ) -> pd.DataFrame:
     """子进程处理器：根据配置批量生成描述符并返回结果"""
-    chunk_records, descriptor_types, fingerprint_types, fp_config = args
+    if len(args) >= 5:
+        chunk_records, descriptor_types, fingerprint_types, fp_config, smiles_column = args[:5]
+    else:
+        chunk_records, descriptor_types, fingerprint_types, fp_config = args
+        smiles_column = None
+
     chunk_df = pd.DataFrame(chunk_records)
 
     if chunk_df.empty:
@@ -263,7 +298,12 @@ def process_chunk_worker(
     row_ids = chunk_df["__row_id"].to_numpy()
     chunk_df = chunk_df.drop(columns="__row_id").reset_index(drop=True)
 
-    smiles_series = chunk_df["SMILES"]
+    smiles_col_name = _resolve_smiles_column_name(chunk_df.columns.tolist(), preferred=smiles_column)
+    if smiles_col_name is None:
+        available_cols = ", ".join(map(str, chunk_df.columns[:20]))
+        raise KeyError(f"未找到SMILES列，当前可用列: {available_cols}")
+
+    smiles_series = chunk_df[smiles_col_name]
     mol_cache, _ = build_molecule_cache(smiles_series)
 
     feature_frames: List[pd.DataFrame] = []

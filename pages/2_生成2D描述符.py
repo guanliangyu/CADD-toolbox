@@ -446,6 +446,9 @@ if 'df' in locals() and 'smiles_column' in locals() and descriptor_types:
         
         # 准备数据
         df_subset = df.head(molecules_to_process).copy()
+        if smiles_column not in df_subset.columns:
+            st.error(f"选择的SMILES列 `{smiles_column}` 不在当前数据中，请重新选择后再试。")
+            st.stop()
         smiles_series = df_subset[smiles_column]
 
         state = _get_state()
@@ -481,7 +484,15 @@ if 'df' in locals() and 'smiles_column' in locals() and descriptor_types:
                     for idxs in chunk_indices:
                         chunk_df = df_subset.iloc[idxs].copy()
                         chunk_df['__row_id'] = chunk_df.index
-                        tasks.append((chunk_df.to_dict(orient='records'), descriptor_types, fingerprint_types, fp_config))
+                        tasks.append(
+                            (
+                                chunk_df.to_dict(orient='records'),
+                                descriptor_types,
+                                fingerprint_types,
+                                fp_config,
+                                smiles_column,
+                            )
+                        )
 
                     results = []
                     ctx = mp.get_context("spawn")

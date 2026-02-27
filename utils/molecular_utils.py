@@ -10,7 +10,6 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
 from rdkit.Chem.AllChem import MMFFOptimizeMolecule, UFFOptimizeMolecule
 from rdkit import DataStructs
-from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator, GetRDKitFPGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +118,8 @@ class MoleculeProcessor:
             # 生成构象
             if method == 'ETKDG':
                 ps = AllChem.ETKDGv3()
-                ps.maxAttempts = 100
+                if hasattr(ps, "maxAttempts"):
+                    ps.maxAttempts = 100
                 cid = AllChem.EmbedMolecule(mol, ps)
             else:
                 cid = AllChem.EmbedMolecule(mol)
@@ -189,17 +189,15 @@ class MoleculeProcessor:
             
         try:
             if fp_type == 'morgan':
-                # 使用新的MorganGenerator API
-                morgan_gen = GetMorganGenerator(radius=radius, fpSize=nBits, useFeatures=use_features)
-                return morgan_gen.GetFingerprint(mol)
+                return AllChem.GetMorganFingerprintAsBitVect(
+                    mol, radius=radius, nBits=nBits, useFeatures=use_features
+                )
             elif fp_type == 'fcfp':
-                # 使用新的MorganGenerator API，设置useFeatures=True
-                morgan_gen = GetMorganGenerator(radius=radius, fpSize=nBits, useFeatures=True)
-                return morgan_gen.GetFingerprint(mol)
+                return AllChem.GetMorganFingerprintAsBitVect(
+                    mol, radius=radius, nBits=nBits, useFeatures=True
+                )
             elif fp_type == 'rdkit':
-                # 使用新的RDKitFPGenerator API
-                rdk_gen = GetRDKitFPGenerator(fpSize=nBits)
-                return rdk_gen.GetFingerprint(mol)
+                return Chem.RDKFingerprint(mol, fpSize=nBits)
             elif fp_type == 'maccs':
                 return rdMolDescriptors.GetMACCSKeysFingerprint(mol)
             else:
@@ -255,28 +253,9 @@ class MoleculeProcessor:
             return {}
             
         try:
-            # 计算惯性主轴
-            conf = mol.GetConformer()
-            principal_moments = list(rdMolDescriptors.CalcPBF(mol))  # 转换为列表
-            
-            if len(principal_moments) != 3:
-                return {}
-                
-            # 计算体积与表面积
-            shape_desc = {
-                'principal_moment_1': float(principal_moments[0]),
-                'principal_moment_2': float(principal_moments[1]),
-                'principal_moment_3': float(principal_moments[2])
-            }
-            
-            # 只在所有主轴都大于0时计算比率
-            if all(m > 0 for m in principal_moments):
-                shape_desc.update({
-                    'sphericity': float(principal_moments[0] / principal_moments[2]),  # 球形度
-                    'asphericity': float((principal_moments[2] - (principal_moments[0] + principal_moments[1])/2) / principal_moments[2])  # 非球度
-                })
-            
-            return shape_desc
+            # CalcPBF返回单个float，作为稳健的3D形状描述符
+            pbf = rdMolDescriptors.CalcPBF(mol)
+            return {'pbf': float(pbf)}
         except Exception as e:
             print(f"计算形状描述符时出错: {str(e)}")
             return {}
@@ -295,11 +274,12 @@ class MoleculeProcessor:
         """
         if fp is None:
             return np.array([])
-            
-        if isinstance(fp, DataStructs.ExplicitBitVect):
-            return np.array(fp)
-            
-        # 对于其他类型的指纹，转换为数组
-        arr = np.zeros((0,), dtype=np.int32)
+
+        # 统一使用ConvertToNumpyArray，兼容不同指纹对象
+        n_bits = int(getattr(fp, "GetNumBits", lambda: 0)())
+        if n_bits <= 0:
+            n_bits = int(getattr(fp, "__len__", lambda: 0)())
+
+        arr = np.zeros((n_bits,), dtype=np.int32)
         DataStructs.ConvertToNumpyArray(fp, arr)
-        return arr 
+        return arr

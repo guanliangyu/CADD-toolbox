@@ -275,7 +275,10 @@ def calculate_coverage_metrics(full_fps: List[Any], subset_fps: List[Any],
     radius_95 = sorted_distances[int(0.95 * len(sorted_distances))]
     
     # 计算混合覆盖指标
-    hybrid_score = coverage_ratio * (1 - mean_dist / max_dist)
+    if max_dist > 0:
+        hybrid_score = coverage_ratio * (1 - mean_dist / max_dist)
+    else:
+        hybrid_score = coverage_ratio
     
     return {
         'coverage_ratio': coverage_ratio,

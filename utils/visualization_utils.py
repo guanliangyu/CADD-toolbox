@@ -11,6 +11,7 @@ import pandas as pd
 import logging
 import umap
 import warnings
+import inspect
 
 # 设置日志
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +27,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 # 设置后端为非交互式
 plt.switch_backend('agg')
+
+TSNE_ITER_PARAM = "max_iter" if "max_iter" in inspect.signature(TSNE).parameters else "n_iter"
 
 def plot_property_distributions(
     df: pd.DataFrame,
@@ -251,12 +254,13 @@ def plot_fps_tsne(
             perplexity = min(30, max(5, len(features) // 100))
         
         # 执行t-SNE降维
-        tsne = TSNE(
-            n_components=2,
-            perplexity=perplexity,
-            n_iter=n_iter,
-            random_state=42
-        )
+        tsne_params = {
+            'n_components': 2,
+            'perplexity': perplexity,
+            'random_state': 42
+        }
+        tsne_params[TSNE_ITER_PARAM] = n_iter
+        tsne = TSNE(**tsne_params)
         reduced_features = tsne.fit_transform(features)
         
         # 创建新图形

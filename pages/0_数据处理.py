@@ -4,6 +4,8 @@ CADD-Toolbox - 数据预处理页面
 """
 from pathlib import Path
 import json
+import hashlib
+import re
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -13,6 +15,7 @@ from rdkit.Chem.Descriptors import MolWt  # type: ignore[attr-defined]
 CHUNK_SIZE = 10 * 1024 * 1024  # 10MB 分块写入
 DOWNLOAD_INLINE_THRESHOLD = 50 * 1024 * 1024  # 50MB 内联下载阈值
 PREVIEW_DEFAULT_ROWS = 1000
+FOLDER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
 
 CSV_PARSER_DISPLAY = {
     "pandas": "Pandas (兼容性最佳)",
@@ -78,13 +81,42 @@ def list_files_in_folder(folder_name: str) -> list[str]:
 
 def create_new_folder(folder_name: str):
     """在 data 目录下创建新文件夹"""
-    if folder_name:
-        folder_path = ensure_data_dir() / folder_name
-        if not folder_path.exists():
-            folder_path.mkdir(parents=True, exist_ok=True)
-            return True, f"成功创建文件夹: {folder_name}"
-        return False, f"文件夹已存在: {folder_name}"
-    return False, "请输入有效的文件夹名称"
+    is_valid, normalized_or_message = validate_folder_name(folder_name)
+    if not is_valid:
+        return False, normalized_or_message
+
+    safe_folder_name = normalized_or_message
+    folder_path = ensure_data_dir() / safe_folder_name
+    if not folder_path.exists():
+        folder_path.mkdir(parents=True, exist_ok=True)
+        return True, f"成功创建文件夹: {safe_folder_name}"
+    return False, f"文件夹已存在: {safe_folder_name}"
+
+
+def validate_folder_name(folder_name: str) -> tuple[bool, str]:
+    """校验并规范化文件夹名称，避免路径穿越和非法字符"""
+    normalized_name = (folder_name or "").strip()
+    if not normalized_name:
+        return False, "请输入有效的文件夹名称"
+    if normalized_name in {".", ".."}:
+        return False, "文件夹名称不能为 . 或 .."
+    if "/" in normalized_name or "\\" in normalized_name:
+        return False, "文件夹名称不能包含路径分隔符"
+    if not FOLDER_NAME_PATTERN.fullmatch(normalized_name):
+        return False, "文件夹名称仅支持中文、英文、数字、点、下划线和短横线"
+    return True, normalized_name
+
+
+def sanitize_uploaded_filename(file_name: str) -> str:
+    """清理上传文件名，移除潜在路径信息"""
+    return Path(file_name).name.strip()
+
+
+def stable_widget_key(prefix: str, *parts: str) -> str:
+    """基于输入内容生成稳定的组件 key，避免重复 key 报错"""
+    joined = "|".join(parts)
+    digest = hashlib.md5(joined.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}_{digest}"
 
 def read_sdf_file(file_path: Path):
     """一次遍历读取 SDF 文件，减少 I/O 开销"""
@@ -176,39 +208,87 @@ def calculate_molecular_weight(smiles_series):
                 mol_weights.append(None)
     return mol_weights
 
+
+def parse_smiles_validity(smiles_series: pd.Series):
+    """解析SMILES并返回分子对象列表及有效性掩码"""
+    parsed_mols = []
+    valid_flags = []
+
+    for smiles in smiles_series:
+        if pd.isna(smiles):
+            mol = None
+        else:
+            mol = Chem.MolFromSmiles(str(smiles))
+        parsed_mols.append(mol)
+        valid_flags.append(mol is not None)
+
+    valid_mask = pd.Series(valid_flags, index=smiles_series.index, dtype=bool)
+    return parsed_mols, valid_mask
+
+
 def create_standardized_output(
     df: pd.DataFrame,
     id_col: str | None,
     smiles_col: str,
     molwt_col: str | None,
     other_cols: list[str],
-    output_path: Path
+    output_path: Path,
+    drop_invalid_smiles: bool = True
 ):
     """创建标准化输出"""
+    parsed_mols = None
+    valid_mask = None
+
+    # 在需要时仅解析一次SMILES，复用到过滤与分子量计算
+    if drop_invalid_smiles or not (molwt_col and molwt_col in df.columns):
+        parsed_mols, valid_mask = parse_smiles_validity(df[smiles_col])
+
+    if drop_invalid_smiles:
+        if valid_mask is None:
+            _, valid_mask = parse_smiles_validity(df[smiles_col])
+        working_df = df.loc[valid_mask].copy()
+    else:
+        working_df = df.copy()
+
     # 创建新的DataFrame
     output_df = pd.DataFrame()
     
     # 标准列
-    output_df['ID'] = df[id_col] if id_col else range(1, len(df) + 1)
-    output_df['SMILES'] = df[smiles_col]
+    output_df['ID'] = working_df[id_col] if id_col else range(1, len(working_df) + 1)
+    output_df['SMILES'] = working_df[smiles_col]
     
     # 分子量处理
     if molwt_col and molwt_col in df.columns:
-        output_df['MolWt'] = df[molwt_col]
+        output_df['MolWt'] = working_df[molwt_col]
     else:
         # 根据SMILES计算分子量
         st.info("正在根据SMILES计算分子量...")
-        output_df['MolWt'] = calculate_molecular_weight(df[smiles_col])
+        if parsed_mols is None:
+            parsed_mols, valid_mask = parse_smiles_validity(df[smiles_col])
+
+        if drop_invalid_smiles and valid_mask is not None:
+            filtered_mols = [mol for mol, is_valid in zip(parsed_mols, valid_mask.tolist()) if is_valid]
+            output_df['MolWt'] = [MolWt(mol) for mol in filtered_mols]
+        else:
+            output_df['MolWt'] = [MolWt(mol) if mol is not None else None for mol in parsed_mols]
     
     # 其他选择的列
     for col in other_cols:
-        if col in df.columns:
-            output_df[col] = df[col]
+        if col in working_df.columns:
+            output_df[col] = working_df[col]
     
     # 保存文件
     output_df.to_csv(output_path, index=False)
 
-    return output_df
+    invalid_rows = int((~valid_mask).sum()) if valid_mask is not None else None
+    dropped_rows = int(len(df) - len(output_df)) if drop_invalid_smiles else 0
+    summary = {
+        "drop_invalid_smiles": drop_invalid_smiles,
+        "invalid_rows": invalid_rows,
+        "dropped_rows": dropped_rows
+    }
+
+    return output_df, summary
 
 # --------------------------------------------------
 # ⚡️ 缓存辅助工具：必须位于首次调用之前
@@ -325,14 +405,34 @@ with col2:
         )
         
         if uploaded_file is not None:
-            # 保存上传的文件
             folder_path = ensure_data_dir() / selected_folder
-            destination = folder_path / uploaded_file.name
+            safe_uploaded_name = sanitize_uploaded_filename(uploaded_file.name)
 
-            save_uploaded_file(uploaded_file, destination)
+            if not safe_uploaded_name:
+                st.error("上传文件名无效，请重命名后重试。")
+            else:
+                if safe_uploaded_name != uploaded_file.name:
+                    st.warning(f"检测到包含路径信息的文件名，已使用安全名称: {safe_uploaded_name}")
 
-            st.success(f"文件已上传: {uploaded_file.name}")
-            st.rerun()
+                destination = folder_path / safe_uploaded_name
+                if destination.exists():
+                    st.warning(f"文件已存在: {safe_uploaded_name}")
+                    overwrite_col, cancel_col = st.columns(2)
+                    overwrite_key = stable_widget_key("overwrite_upload", selected_folder, safe_uploaded_name)
+                    cancel_key = stable_widget_key("cancel_upload", selected_folder, safe_uploaded_name)
+
+                    with overwrite_col:
+                        if st.button("覆盖现有文件", key=overwrite_key, use_container_width=True):
+                            save_uploaded_file(uploaded_file, destination)
+                            st.success(f"文件已覆盖上传: {safe_uploaded_name}")
+                            st.rerun()
+                    with cancel_col:
+                        if st.button("取消", key=cancel_key, use_container_width=True):
+                            st.info("已取消上传操作。")
+                else:
+                    save_uploaded_file(uploaded_file, destination)
+                    st.success(f"文件已上传: {safe_uploaded_name}")
+                    st.rerun()
     else:
         st.warning("请先选择工作目录")
 
@@ -358,9 +458,10 @@ if selected_folder and selected_file:
     file_path = ensure_data_dir() / selected_folder / selected_file
     file_ext = file_path.suffix.lower()
     file_key = f"{selected_folder}/{selected_file}"
+    current_mtime = file_mtime(file_path)
 
     if st.session_state.get("current_file_key") != file_key:
-        for cache_key in ("preview_df", "preview_columns", "full_df", "full_columns", "validation_summary"):
+        for cache_key in ("preview_df", "preview_columns", "full_df", "full_columns", "validation_summary", "validation_cache"):
             st.session_state.pop(cache_key, None)
         st.session_state["current_file_key"] = file_key
 
@@ -406,7 +507,7 @@ if selected_folder and selected_file:
                     file_path,
                     file_ext,
                     selected_parser,
-                    file_mtime(file_path),
+                    current_mtime,
                     preview_rows
                 )
             st.session_state["preview_df"] = preview_df
@@ -419,7 +520,7 @@ if selected_folder and selected_file:
                     file_path,
                     file_ext,
                     selected_parser,
-                    file_mtime(file_path)
+                    current_mtime
                 )
             st.session_state["full_df"] = full_df
             st.session_state["full_columns"] = full_columns
@@ -474,16 +575,13 @@ if selected_folder and selected_file:
                 col for col in available_columns
                 if 'molwt' in col.lower() or 'weight' in col.lower() or 'mw' in col.lower()
             ]
-            molwt_col_idx = st.selectbox(
+            molwt_default_index = 1 if len(molwt_options) > 1 else 0
+            selected_molwt_option = st.selectbox(
                 "分子量列",
-                options=range(len(molwt_options)),
-                format_func=lambda x: molwt_options[x]
+                options=molwt_options,
+                index=molwt_default_index
             )
-            molwt_col = (
-                available_columns[molwt_col_idx - 1]
-                if molwt_col_idx > 0 and molwt_col_idx <= len(available_columns)
-                else None
-            )
+            molwt_col = selected_molwt_option if selected_molwt_option != "根据SMILES计算" else None
 
         with col_right:
             st.markdown("**其他属性列**")
@@ -495,6 +593,9 @@ if selected_folder and selected_file:
                 options=other_columns,
                 help="这些列会出现在输出文件中。"
             )
+
+        if "drop_invalid_smiles" not in st.session_state:
+            st.session_state["drop_invalid_smiles"] = True
 
         data_for_validation = full_df if full_df is not None else preview_df
 
@@ -523,39 +624,97 @@ if selected_folder and selected_file:
                         )
                     )
 
-                progress_bar = st.progress(0.0)
-                valid_count, total_count, evaluated_count = validate_smiles(
-                    data_for_validation[smiles_col],
-                    sample_size=sample_size,
-                    progress_callback=progress_bar.progress
+                validation_cache = st.session_state.setdefault("validation_cache", {})
+                data_scope = "full" if full_df is not None else "preview"
+                validation_key = json.dumps(
+                    {
+                        "file": file_key,
+                        "mtime": current_mtime,
+                        "smiles_column": smiles_col,
+                        "mode": "full" if validation_mode == "全量验证" else "sample",
+                        "sample_size": int(sample_size) if sample_size else None,
+                        "scope": data_scope,
+                        "rows": int(total_rows),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True
                 )
-                progress_bar.empty()
 
-                summary_payload = {
-                    "mode": "full" if validation_mode == "全量验证" else "sample",
-                    "valid_count": int(valid_count),
-                    "evaluated_count": int(evaluated_count),
-                    "total_count": int(total_count),
-                    "sample_size": int(sample_size) if sample_size else None,
-                }
-                st.session_state["validation_summary"] = summary_payload
+                run_validation = st.button(
+                    "开始验证",
+                    key=stable_widget_key(
+                        "run_validation",
+                        file_key,
+                        smiles_col,
+                        validation_mode,
+                        str(sample_size),
+                        data_scope
+                    ),
+                    use_container_width=True
+                )
 
-                if evaluated_count == 0:
-                    st.warning("未检测到有效的 SMILES 数据")
+                if run_validation:
+                    cached_summary = validation_cache.get(validation_key)
+                    if cached_summary is not None:
+                        st.session_state["validation_summary"] = cached_summary
+                        st.success("已加载缓存验证结果。")
+                    else:
+                        progress_bar = st.progress(0.0)
+                        valid_count, total_count, evaluated_count = validate_smiles(
+                            data_for_validation[smiles_col],
+                            sample_size=sample_size,
+                            progress_callback=progress_bar.progress
+                        )
+                        progress_bar.empty()
+
+                        summary_payload = {
+                            "mode": "full" if validation_mode == "全量验证" else "sample",
+                            "valid_count": int(valid_count),
+                            "evaluated_count": int(evaluated_count),
+                            "total_count": int(total_count),
+                            "sample_size": int(sample_size) if sample_size else None,
+                            "scope": data_scope,
+                            "smiles_column": smiles_col,
+                            "cache_key": validation_key,
+                        }
+                        validation_cache[validation_key] = summary_payload
+                        st.session_state["validation_cache"] = validation_cache
+                        st.session_state["validation_summary"] = summary_payload
+
+                summary_payload = st.session_state.get("validation_summary")
+                if summary_payload and summary_payload.get("cache_key") == validation_key:
+                    valid_count = int(summary_payload["valid_count"])
+                    evaluated_count = int(summary_payload["evaluated_count"])
+                    total_count = int(summary_payload["total_count"])
+
+                    if evaluated_count == 0:
+                        st.warning("未检测到有效的 SMILES 数据")
+                    else:
+                        ratio = valid_count / evaluated_count * 100
+                        label = "有效SMILES"
+                        if evaluated_count != total_count:
+                            label += f"（抽样 {evaluated_count} 条）"
+                        st.metric(label, f"{valid_count}/{evaluated_count}", f"{ratio:.1f}%")
+
+                        if evaluated_count < total_count:
+                            st.info(f"原始数据共 {total_count} 条，已抽样验证 {evaluated_count} 条。")
+
+                        if valid_count < evaluated_count:
+                            invalid_count = evaluated_count - valid_count
+                            if st.session_state.get("drop_invalid_smiles", True):
+                                st.warning(f"发现 {invalid_count} 个无效SMILES，当前设置为生成时跳过。")
+                            else:
+                                st.warning(f"发现 {invalid_count} 个无效SMILES，当前设置为保留。")
                 else:
-                    ratio = valid_count / evaluated_count * 100
-                    label = "有效SMILES"
-                    if evaluated_count != total_count:
-                        label += f"（抽样 {evaluated_count} 条）"
-                    st.metric(label, f"{valid_count}/{evaluated_count}", f"{ratio:.1f}%")
-
-                    if evaluated_count < total_count:
-                        st.info(f"原始数据共 {total_count} 条，已抽样验证 {evaluated_count} 条。")
-
-                    if valid_count < evaluated_count:
-                        st.warning(f"发现 {evaluated_count - valid_count} 个无效SMILES，处理时将跳过")
+                    st.caption("点击“开始验证”以执行当前配置的 SMILES 校验。")
 
         st.subheader("💾 输出设置")
+        drop_invalid_smiles = st.checkbox(
+            "处理时跳过无效SMILES",
+            value=st.session_state.get("drop_invalid_smiles", True),
+            key="drop_invalid_smiles",
+            help="开启后会在生成标准化文件时移除无法解析为分子的行。"
+        )
 
         base_name = Path(selected_file).stem
         output_filename = f"prepared_{base_name}.csv"
@@ -571,7 +730,7 @@ if selected_folder and selected_file:
                         file_path,
                         file_ext,
                         selected_parser,
-                        file_mtime(file_path)
+                        current_mtime
                     )
                 st.session_state["full_df"] = df_for_processing
                 st.session_state["full_columns"] = full_columns
@@ -582,17 +741,20 @@ if selected_folder and selected_file:
                 validation_summary = st.session_state.get("validation_summary")
                 try:
                     with st.spinner("正在处理数据..."):
-                        output_df = create_standardized_output(
+                        output_df, processing_summary = create_standardized_output(
                             df_for_processing,
                             id_col,
                             smiles_col,
                             molwt_col,
                             selected_other_cols,
-                            output_path
+                            output_path,
+                            drop_invalid_smiles=drop_invalid_smiles
                         )
 
                     st.success(f"✅ 成功生成标准化文件: {output_filename}")
                     st.info(f"文件保存位置: {output_path.parent.resolve()} / {output_filename}")
+                    if processing_summary.get("drop_invalid_smiles") and processing_summary.get("dropped_rows", 0) > 0:
+                        st.warning(f"已跳过 {processing_summary['dropped_rows']} 条无效SMILES记录。")
 
                     with st.expander("输出预览", expanded=True):
                         st.dataframe(output_df.head(10))
@@ -611,6 +773,10 @@ if selected_folder and selected_file:
                         "total_rows": int(len(output_df)),
                         "columns": list(output_df.columns),
                         "validation": validation_summary,
+                        "output_options": {
+                            "drop_invalid_smiles": drop_invalid_smiles
+                        },
+                        "processing_summary": processing_summary,
                     }
 
                     metadata_path = output_path.with_suffix('.meta.json')

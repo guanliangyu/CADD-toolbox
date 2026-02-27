@@ -271,6 +271,10 @@ def maxmin_selection(fps: List[Any], num_to_select: int,
     n = len(fps)
     if num_to_select >= n:
         return list(range(n))
+
+    if distance_metric == 'combo':
+        logger.warning("distance_metric='combo' 当前回退为 euclidean")
+        distance_metric = 'euclidean'
     
     # 检查是否可以使用GPU加速
     use_gpu = False
@@ -323,7 +327,8 @@ def maxmin_selection(fps: List[Any], num_to_select: int,
                 # 如果是NumPy数组
                 a_bits = np.array(fps[i], dtype=bool)
                 b_bits = np.array(fps[j], dtype=bool)
-                sim = np.sum(a_bits & b_bits) / np.sum(a_bits | b_bits)
+                denom = np.sum(a_bits | b_bits)
+                sim = np.sum(a_bits & b_bits) / denom if denom else 0.0
                 return 1.0 - sim
         elif distance_metric == 'euclidean':
             return np.linalg.norm(np.array(fps[i]) - np.array(fps[j]))
@@ -335,7 +340,7 @@ def maxmin_selection(fps: List[Any], num_to_select: int,
     if seed_idx < 0:
         seed_idx = np.random.randint(0, n)
     
-    selected_indices = list(picker.LazyBitVectorPick(
+    selected_indices = list(picker.LazyPick(
         distance_fn, n, num_to_select, seed_idx
     ))
     

@@ -49,14 +49,13 @@
 - Ubuntu 20.04 LTS
 - Python 3.10
 - 16GB+ RAM
-- NVIDIA GPU（支持CUDA 11.8+）
+- NVIDIA GPU（支持 CUDA 12.x，脚本默认安装 CUDA 12.2 运行时）
 - 20GB+ SSD空间
 - 100Mbps+ 网络
 
 #### GPU支持要求
-- NVIDIA GPU with CUDA 11.8+
-- CUDA Driver 520+
-- cuDNN 8.6+
+- NVIDIA GPU with CUDA 12.x
+- CUDA Driver 535+（建议）
 - 至少 8GB GPU 内存
 
 ### 一键安装（推荐）
@@ -65,7 +64,7 @@ CADD-Toolbox 提供了一个经过优化的安装脚本，能够自动检测并�
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-repo/CADD-toolbox.git
+git clone https://github.com/guanliangyu/CADD-toolbox.git
 cd CADD-toolbox
 
 # 给安装脚本执行权限
@@ -83,23 +82,14 @@ streamlit run Home.py
 
 ### 安装过程说明
 
-安装脚本会按以下步骤进行：
+安装脚本会输出 Step 日志，核心流程包括：
 
-1. **Step 0**：检查并安装 mamba（如果未安装）
-2. **Step 1**：创建基础 Python 3.10 环境
-3. **Step 2**：激活环境
-4. **Step 3**：安装 CUDA Runtime 支持
-5. **Step 4**：安装 RAPIDS 基础依赖
-6. **Step 5**：安装核心科学计算库
-7. **Step 6**：安装 RAPIDS 库
-8. **Step 7**：安装 PyTorch
-9. **Step 8**：安装其他 GPU 库
-10. **Step 9**：安装分子计算库
-11. **Step 10**：安装可视化库
-12. **Step 11**：安装 Web 框架和数据处理工具
-13. **Step 12**：安装文件处理和配置库
-14. **Step 13**：安装机器学习和系统工具
-15. **Step 14**：安装专用 pip 包
+1. 配置 conda channels，并检查 GPU/驱动
+2. 检查并安装 mamba（如缺失）
+3. 创建并激活 `CADD-Toolbox` 环境
+4. 安装 CUDA/PyTorch/FAISS/RAPIDS（GPU 模式）或 CPU 版本依赖
+5. 安装 RDKit、Streamlit、可视化与文件处理相关依赖
+6. 执行环境自检并打印结果
 
 ### 环境验证
 
@@ -108,9 +98,8 @@ streamlit run Home.py
 # 检查 Python 版本
 python --version
 
-# 检查关键库
-python -c "import rdkit; print('RDKit:', rdkit.__version__)"
-python -c "import streamlit; print('Streamlit:', streamlit.__version__)"
+# 运行核心依赖自检（推荐）
+python test_environment.py
 ```
 
 #### CUDA 环境检查
@@ -121,7 +110,6 @@ chmod +x check_cuda_version.sh
 
 # 手动检查 CUDA
 nvidia-smi
-python -c "import cudf; print('cuDF available')"
 
 # 运行GPU特性自检脚本
 python test/check_gpu_support.py
@@ -129,7 +117,7 @@ python test/check_gpu_support.py
 
 #### 运行测试
 ```bash
-# 运行环境测试
+# 可选：JAX/TensorFlow 兼容性检查（未安装JAX时会提示并跳过）
 python test/check_jax.py
 ```
 
@@ -237,7 +225,7 @@ streamlit run Home.py
 
 ##### 1. 数据处理（预处理）
 - **功能**：上传分子文件，进行基础数据清理和格式化
-- **支持格式**：CSV、SDF、SMI 文件
+- **支持格式**：CSV、SDF 文件
 - **主要操作**：
   - SMILES 规范化
   - 分子有效性检查
@@ -315,6 +303,12 @@ streamlit run Home.py
 - **使用场景**：
   - 直接对生成的指纹 CSV（2D/3D）进行多样性评估
   - 对筛选前后数据集进行覆盖度、分布、聚类质量对比
+- **模块化实现**：
+  - `pages/5_结构多样性评估.py` 负责参数交互与流程编排
+  - `utils/structure_diversity_data.py` 负责数据读取、缓存与抽样
+  - `utils/structure_diversity_similarity.py` 负责相似性与多样性统计
+  - `utils/structure_diversity_analysis.py` 负责降维与聚类计算
+  - `utils/structure_diversity_visualization.py` 负责图表与分布对比渲染
 
 #### 使用流程建议
 
@@ -341,17 +335,19 @@ streamlit run Home.py
 
 ```bash
 # 基础命令
-python scripts/run_pipeline.py --input data/molecules.csv --output results/
+python scripts/run_pipeline.py --input /path/to/molecules.csv --output results/
 
 # 完整参数
 python scripts/run_pipeline.py \
-  --input data/molecules.csv \
+  --input /path/to/molecules.sdf \
   --output results/ \
-  --config configs/my_config.yml \
+  --config configs/default_config.yml \
   --smiles_col "SMILES" \
   --use_gpu \
   --gpu_id 0
 ```
+
+> 说明：当输入是 SDF 时，`run_pipeline.py` 会自动从 `ROMol` 生成 `SMILES` 列，可直接使用默认 `--smiles_col`。
 
 #### 参数说明
 
@@ -373,9 +369,10 @@ for file in data/*.csv; do
   python scripts/run_pipeline.py --input "$file" --output "results/$(basename $file .csv)"
 done
 
-# 使用不同配置
+# 使用自定义配置（先从默认配置复制一份）
+cp configs/default_config.yml configs/large_dataset_config.yml
 python scripts/run_pipeline.py \
-  --input data/large_library.csv \
+  --input /path/to/large_library.csv \
   --output results/large_lib \
   --config configs/large_dataset_config.yml \
   --use_gpu
@@ -484,28 +481,30 @@ clustering:
 
 ```
 results/
-├── representative_subset_20241201_143022.csv    # CSV格式结果
-├── representative_subset_20241201_143022.sdf    # SDF格式结果（含3D）
-├── plots/                                       # 可视化图表
-│   ├── diversity_analysis.png
-│   ├── pca_plot.png
-│   └── cluster_distribution.png
-├── coverage_metrics_20241201_143022.txt         # 覆盖度指标
-└── processing_log.txt                           # 处理日志
+├── representative_subset_20241201_143022.csv       # CSV结果
+├── representative_subset_20241201_143022.sdf       # SDF结果
+├── coverage_metrics_20241201_143022.txt            # 覆盖度指标
+├── processed_results_20241201_143022.pkl           # 可选：中间结果（save_intermediates=true）
+└── plots/
+    ├── property_distribution_20241201_143022.png
+    └── nearest_neighbor_distribution_20241201_143022.png
+
+# 另：运行目录下会生成日志文件
+molecular_subset.log
 ```
 
 ### 结果解读
 
 #### CSV 结果文件
 - 包含选中的代表性分子
-- 保留原始分子 ID 和属性
-- 添加聚类标签和多样性评分
+- 默认保留输入中的原始列与记录顺序子集
+- 不会自动附加聚类标签或多样性评分列
 
 #### 覆盖度指标
-- **覆盖率**：子集覆盖原始库的比例
-- **平均最近邻距离**：子集内分子的平均相似度
-- **多样性指数**：Shannon 多样性指数
-- **聚类质量**：轮廓系数等聚类评估指标
+- `coverage_ratio`：在距离阈值内被覆盖的分子比例
+- `mean_distance` / `median_distance` / `max_distance`：全库到子集最近邻距离统计
+- `radius_90` / `radius_95`：覆盖 90%/95% 分子的有效半径
+- `hybrid_score`：覆盖率与距离表现的综合指标
 
 ## 🚀 性能优化建议
 
@@ -569,6 +568,10 @@ CADD-toolbox/
 │   ├── feature_utils.py       # 特征计算
 │   ├── gpu_utils.py           # GPU加速
 │   ├── descriptor_generation.py # 2D描述符/指纹生成
+│   ├── structure_diversity_data.py        # 结构多样性：数据读取/缓存/抽样
+│   ├── structure_diversity_similarity.py  # 结构多样性：相似性/多样性统计
+│   ├── structure_diversity_analysis.py    # 结构多样性：降维/聚类分析
+│   ├── structure_diversity_visualization.py # 结构多样性：可视化与分布对比
 │   ├── background_*.py       # 后台任务管理
 │   └── validation_utils.py   # 结果验证
 ├── configs/                   # 配置文件
@@ -675,7 +678,7 @@ python -c "import cudf; print('GPU available')"
 2. 检查是否有网络连接问题
 3. 确认系统满足最低要求
 4. 提交 GitHub Issue 并附上详细的错误信息
-5. 联系技术支持：[your-email@domain.com]
+5. 项目仓库地址：`https://github.com/guanliangyu/CADD-toolbox`
 
 ---
 

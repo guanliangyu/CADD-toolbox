@@ -16,13 +16,12 @@ import yaml
 import pandas as pd
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem, PandasTools
-from pathlib import Path
+from rdkit.Chem import PandasTools
 import multiprocessing as mp
 from tqdm import tqdm
 import logging
-import matplotlib.pyplot as plt
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 import pickle
 import datetime
 
@@ -40,7 +39,7 @@ from utils.clustering_utils import (
 from utils.feature_utils import DimensionalityReducer, FeatureCombiner
 from utils.validation_utils import (
     calculate_nearest_neighbor_distance, plot_property_distributions,
-    plot_nearest_neighbor_histogram, plot_pca_visualization,
+    plot_nearest_neighbor_histogram,
     calculate_coverage_metrics
 )
 
@@ -93,7 +92,8 @@ def load_data(input_file):
     if ext == '.csv':
         df = pd.read_csv(input_file)
     elif ext == '.sdf':
-        df = PandasTools.LoadSDF(input_file)
+        # 直接为SDF生成SMILES列，减少后续参数要求
+        df = PandasTools.LoadSDF(input_file, smilesName='SMILES', molColName='ROMol')
     else:
         raise ValueError(f"不支持的文件格式: {ext}")
         
@@ -202,6 +202,17 @@ def batch_process_molecules(df, config, smiles_col='SMILES'):
     
     logger.info(f"开始批量处理分子: 批量大小={batch_size}, CPU核心数={n_jobs}, 3D={include_3d}, 电荷={include_charges}")
     
+    # 兼容SDF输入：若缺失SMILES列则尝试从ROMol自动生成
+    if smiles_col not in df.columns:
+        if 'ROMol' in df.columns:
+            logger.warning(f"未找到列 {smiles_col}，已从 ROMol 自动生成该列")
+            df = df.copy()
+            df[smiles_col] = df['ROMol'].map(
+                lambda mol: Chem.MolToSmiles(mol) if mol is not None else None
+            )
+        else:
+            raise KeyError(f"输入数据缺少列 {smiles_col}，且不存在可回退的 ROMol 列")
+
     # 准备批次数据
     smiles_list = df[smiles_col].tolist()
     total = len(smiles_list)
@@ -221,9 +232,15 @@ def batch_process_molecules(df, config, smiles_col='SMILES'):
     }
     
     start_time = time.time()
+    worker = partial(
+        process_molecule_batch,
+        config=config,
+        include_3d=include_3d,
+        include_charges=include_charges
+    )
     with ProcessPoolExecutor(max_workers=n_jobs) as executor:
         for batch_result in tqdm(
-            executor.map(lambda x: process_molecule_batch(x, config, include_3d, include_charges), batches),
+            executor.map(worker, batches),
             total=len(batches),
             desc="处理分子批次"
         ):
@@ -278,13 +295,14 @@ def combine_features_and_reduce(processed_results, config):
     return combined_features, reduced_features
 
 
-def select_representative_subset(features, mols, config):
+def select_representative_subset(features, mols, fps, config):
     """
     选择代表性子集
     
     参数:
         features: 特征矩阵
         mols: 分子列表
+        fps: 分子指纹列表
         config: 配置字典
         
     返回:
@@ -297,34 +315,47 @@ def select_representative_subset(features, mols, config):
     
     # 移除无效分子
     valid_idx = [i for i, m in enumerate(mols) if m is not None]
+    if not valid_idx:
+        raise ValueError("没有可用的有效分子，无法执行代表性子集选择")
+
     valid_features = features[valid_idx]
     
     # 计算目标选择数量（默认约1%）
     total_valid = len(valid_idx)
-    target_count = int(total_valid * 0.01)  # 默认1%
+    target_count = max(1, int(np.ceil(total_valid * 0.01)))  # 默认1%，至少1个
     
     # 根据聚类方法选择代表
     if method == 'butina':
         # Butina算法需要指纹，而不是降维后的特征
         cutoff = clustering_config.get('butina', {}).get('cutoff', 0.4)
-        valid_fps = [processor.fp_to_numpy(mols[i]) for i in valid_idx]
-        clusters = butina_clustering(valid_fps, cutoff=cutoff)
+        valid_fp_idx = [
+            i for i in valid_idx
+            if fps[i] is not None and np.asarray(fps[i]).size > 0
+        ]
+        if not valid_fp_idx:
+            raise ValueError("Butina 聚类需要有效指纹，但当前没有可用指纹")
+
+        valid_fps = [fps[i] for i in valid_fp_idx]
+        clusters = butina_clustering(valid_fps, cutoff=cutoff, config=config)
         
         # 选择每个簇的代表分子
-        rep_indices = select_cluster_representatives(clusters, valid_fps, method='centroid')
+        rep_indices = select_cluster_representatives(
+            clusters, valid_fps, method='centroid', config=config
+        )
         
         # 将局部索引映射回全局索引
-        global_indices = [valid_idx[i] for i in rep_indices]
+        global_indices = [valid_fp_idx[i] for i in rep_indices]
         
     elif method == 'kmeans':
         # K-means直接使用降维后的特征
         n_clusters = clustering_config.get('kmeans', {}).get('n_clusters', target_count)
+        n_clusters = max(1, min(n_clusters, len(valid_features)))
         batch_size = clustering_config.get('kmeans', {}).get('batch_size', 1000)
         max_iter = clustering_config.get('kmeans', {}).get('max_iter', 100)
         
         labels, centers = kmeans_clustering(
             valid_features, n_clusters=n_clusters, 
-            batch_size=batch_size, max_iter=max_iter
+            batch_size=batch_size, max_iter=max_iter, config=config
         )
         
         # 选择最接近簇中心的分子
@@ -337,11 +368,14 @@ def select_representative_subset(features, mols, config):
         # MaxMin选择器
         num_to_select = target_count
         distance_metric = clustering_config.get('maxmin', {}).get('distance_measure', 'euclidean')
+        if distance_metric == 'combo':
+            logger.warning("maxmin.distance_measure=combo 当前回退为 euclidean")
+            distance_metric = 'euclidean'
         
         # MaxMin直接返回选择的索引
         rep_local_indices = maxmin_selection(
             valid_features, num_to_select=num_to_select, 
-            distance_metric=distance_metric
+            distance_metric=distance_metric, config=config
         )
         
         # 映射回全局索引
@@ -355,7 +389,8 @@ def select_representative_subset(features, mols, config):
         labels = hdbscan_clustering(
             valid_features, 
             min_cluster_size=min_cluster_size,
-            min_samples=min_samples
+            min_samples=min_samples,
+            config=config
         )
         
         # 计算簇数量
@@ -571,7 +606,12 @@ def main():
     _, reduced_features = combine_features_and_reduce(processed_results, config)
     
     # 选择代表性子集
-    subset_indices = select_representative_subset(reduced_features, processed_results['mols'], config)
+    subset_indices = select_representative_subset(
+        reduced_features,
+        processed_results['mols'],
+        processed_results['fps'],
+        config
+    )
     
     # 验证子集代表性
     validation_results = validate_subset(processed_results, subset_indices, config)
