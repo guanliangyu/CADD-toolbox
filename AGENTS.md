@@ -23,6 +23,16 @@
 - Retain detailed Chinese docstrings and type hints describing RDKit objects and numerical expectations.
 - Use module-level loggers and guard multiprocessing or Streamlit entry points with `if __name__ == "__main__":`.
 
+## Lint & Format Requirements
+- `ruff` and `black` are required gates for local changes and CI.
+- Before commit, run:
+  - `ruff check .`
+  - `black --check --diff .`
+- If checks fail, run:
+  - `ruff check . --fix` (optionally `--unsafe-fixes` when needed and reviewed)
+  - `black .`
+- Re-run `ruff check .` and `black --check --diff .` until both pass.
+
 ## Testing Guidelines
 - Place new files in `test/` and name them `test_<feature>.py`; expose helper functions so they can be imported.
 - Reproduce GPU/CPU branches by running `python scripts/run_pipeline.py ...` on a trimmed dataset and capturing logs.
